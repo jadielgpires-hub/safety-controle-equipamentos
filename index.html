@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="theme-color" content="#073B73">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" type="image/png" href="./assets/icon-192.png">
+<title>Safety - Controle de Equipamentos</title>
+<link rel="stylesheet" href="./styles.css">
+<script src="https://cdn.jsdelivr.net/npm/firebase@10.12.2/firebase-app-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/firebase@10.12.2/firebase-auth-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/firebase@10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="./firebase-config.js"></script>
+</head>
+<body>
+
+<div id="publicRequest" class="hidden public-page"></div>
+
+<div id="login">
+  <section class="login-shell">
+    <div class="login-brand-panel">
+      <img class="login-brand-logo" src="./assets/logo-safety-equipamentos.jpeg" alt="Safety Equipamentos">
+      <div>
+        <span class="eyebrow">SAFETY EQUIPAMENTOS</span>
+        <h1>Controle de<br>Equipamentos</h1>
+        <p>Locações, assistência técnica, cobranças, documentos, testes, rastreabilidade e histórico em um único ambiente.</p>
+      </div>
+      <div class="brand-rule"><span></span></div>
+    </div>
+    <div class="login-form-panel"><div class="login-form-wrap">
+      <span class="eyebrow">ACESSO RESTRITO</span>
+      <h2>Entrar no sistema</h2>
+      <p class="login-intro">Use seu e-mail e senha cadastrados pela Safety Equipamentos.</p>
+      <div id="telaLogin">
+        <label>E-mail</label><input id="u" type="email" autocomplete="username" placeholder="seuemail@exemplo.com">
+        <label>Senha</label><input id="p" type="password" autocomplete="current-password" placeholder="Digite sua senha">
+        <button class="btn full" onclick="fazerLogin()">Entrar</button>
+        <p class="hint" id="msgLogin"></p>
+        <button class="link-btn" onclick="mostrarRecuperacao()">Esqueci minha senha</button>
+        <a class="public-cta" href="?solicitar=1">Solicitar locação de equipamento</a>
+      </div>
+      <div id="telaRecuperar" class="hidden">
+        <label>Informe seu e-mail cadastrado</label><input id="eRecuperar" type="email" placeholder="seu@email.com">
+        <button class="btn full" onclick="enviarRecuperacao()">Enviar link de recuperação</button>
+        <p class="hint" id="msgRecuperar"></p>
+        <button class="link-btn" onclick="voltarLogin()">Voltar ao login</button>
+      </div>
+      <div class="login-footer"><span>Safety Equipamentos</span><span>•</span><span>Uso interno</span></div>
+    </div></div>
+  </section>
+</div>
+
+<div id="appShell" class="hidden">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <img src="./assets/logo-safety-equipamentos.jpeg" alt="Safety">
+      <div><strong>Safety Equipamentos</strong><span>Controle de Equipamentos</span></div>
+    </div>
+    <nav id="nav"></nav>
+    <div class="sidebar-footer">V1.0 • Uso interno</div>
+  </aside>
+  <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="fecharMenu()"></div>
+  <main class="app-main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="menu-toggle" onclick="toggleMenu()">☰</button>
+        <div><span class="topbar-kicker">SAFETY EQUIPAMENTOS</span><h1 id="pageTitle">Dashboard</h1></div>
+      </div>
+      <div class="user-area">
+        <div class="user-meta"><strong id="userName">—</strong><span id="userRole">Acesso total</span></div>
+        <div class="user-avatar" id="userAvatar">S</div>
+        <button class="logout-btn" onclick="sair()">Sair</button>
+      </div>
+    </header>
+    <section id="main"></section>
+  </main>
+</div>
+
+<div id="modal" class="modal hidden" aria-hidden="true">
+  <div class="modal-card">
+    <div class="modal-head"><h3 id="modalTitle">Editar</h3><button class="icon-btn" onclick="fecharModal()">✕</button></div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-foot" id="modalFoot"></div>
+  </div>
+</div>
+
+<div id="signatureModal" class="modal-sign hidden">
+  <div class="modal-sign-card">
+    <div class="modal-sign-head"><h3 id="signatureTitle">Assinatura eletrônica</h3></div>
+    <div class="modal-sign-body">
+      <p class="hint" id="signatureHint">Assine no campo abaixo usando o dedo ou mouse.</p>
+      <canvas id="signatureCanvas" class="signature-canvas"></canvas>
+    </div>
+    <div class="modal-sign-foot">
+      <button class="btn ghost" onclick="limparAssinatura()">Limpar</button>
+      <button class="btn ghost" onclick="fecharAssinatura()">Cancelar</button>
+      <button class="btn" onclick="salvarAssinatura()">Salvar assinatura</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<div id="printArea" class="printArea"></div>
+
+<script src="./app.js"></script>
+</body>
+</html>

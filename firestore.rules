@@ -1,0 +1,56 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function ceUser() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/ce_usuarios/$(request.auth.uid))
+        && get(/databases/$(database)/documents/ce_usuarios/$(request.auth.uid)).data.ativo != false;
+    }
+
+    function ceAdmin() {
+      return ceUser()
+        && get(/databases/$(database)/documents/ce_usuarios/$(request.auth.uid)).data.admin == true;
+    }
+
+    // Pré-cadastro público: pode enviar, mas somente usuários internos podem consultar/alterar.
+    match /ce_solicitacoes/{id} {
+      allow create: if request.resource.data.status == 'Nova'
+        && request.resource.data.nomeRazao is string
+        && request.resource.data.cpfCnpj is string
+        && request.resource.data.telefone is string
+        && request.resource.data.email is string;
+      allow read, update, delete: if ceUser();
+    }
+
+    // Categorias podem ser lidas pelo formulário público para exibir as opções.
+    match /ce_categorias/{id} {
+      allow read: if true;
+      allow create, update, delete: if ceUser();
+    }
+
+    // O próprio usuário pode ler seu cadastro para concluir a autorização do login.
+    // Criação/alteração de usuários fica restrita aos administradores do aplicativo.
+    match /ce_usuarios/{uid} {
+      allow read: if request.auth != null && (request.auth.uid == uid || ceUser());
+      allow create, update, delete: if ceAdmin();
+    }
+
+    match /ce_clientes/{id}       { allow read, write: if ceUser(); }
+    match /ce_equipamentos/{id}   { allow read, write: if ceUser(); }
+    match /ce_locacoes/{id}       { allow read, write: if ceUser(); }
+    match /ce_assistencias/{id}   { allow read, write: if ceUser(); }
+    match /ce_cobrancas/{id}      { allow read, write: if ceUser(); }
+    match /ce_documentos/{id}     { allow read, write: if ceUser(); }
+    match /ce_testes/{id}         { allow read, write: if ceUser(); }
+    match /ce_vistorias/{id}      { allow read, write: if ceUser(); }
+    match /ce_movimentos/{id}     { allow read, write: if ceUser(); }
+    match /ce_fabricantes/{id}    { allow read, write: if ceUser(); }
+    match /ce_configuracoes/{id}  { allow read, write: if ceUser(); }
+
+    match /ce_auditoria/{id} {
+      allow create, read: if ceUser();
+      allow update, delete: if false;
+    }
+  }
+}
