@@ -5,7 +5,7 @@
 */
 window.SAFETY_CE_CONFIG = {
   firebase: {
-    apiKey: "AIzaSyBTRYBX61wu453YjbT1o22W2dKxGqWLCSM",
+    apiKey: "AIzaSyBTRYBX61wu453YibT1o22W2dKxGqWLCsM",
     authDomain: "safety-equipamentos-sistema.firebaseapp.com",
     projectId: "safety-equipamentos-sistema",
     storageBucket: "safety-equipamentos-sistema.firebasestorage.app",
