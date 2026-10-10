@@ -1,0 +1,43 @@
+SAFETY - CONTROLE DE EQUIPAMENTOS
+V1 DEFINITIVA - HOTFIX 02
+
+OBJETIVO
+Proteger a base real contra arquivamento acidental durante futuras homologações.
+
+ARQUIVOS A SUBSTITUIR NO GITHUB
+1. app.js
+2. sw.js
+
+NÃO SUBSTITUIR
+- firebase-config.js (mantenha a chave de API que já está funcionando)
+- firestore.rules (não houve alteração de regras neste hotfix)
+- index.html
+- styles.css
+
+O QUE MUDOU
+- O antigo botão genérico "Arquivar dados atuais de teste" foi removido.
+- "Arquivar Homologação V1" atua SOMENTE em registros identificados como Homologação V1.
+- Dados reais/produção não são alterados pelo arquivamento da homologação.
+- "Reativar Homologação V1" reativa somente os registros da V1 e ativa o modo de homologação neste navegador.
+- Enquanto o modo Homologação V1 estiver ativo neste navegador, novos registros operacionais criados nele recebem marcação de teste automaticamente.
+- Um aviso visível aparece em todas as telas enquanto o modo homologação estiver ativo.
+- Ao arquivar a Homologação V1, o modo de teste deste navegador é encerrado automaticamente.
+- Novos registros fora do modo homologação recebem identificação de produção.
+
+FLUXO PARA A APRESENTAÇÃO AO CONSELHO
+1. Publique app.js e sw.js.
+2. Faça Ctrl+F5.
+3. Entre em Configurações > Dados de homologação.
+4. Clique em "Reativar Homologação V1".
+5. Confirme que aparece o aviso "MODO HOMOLOGAÇÃO V1 ATIVO".
+6. Faça a apresentação. Se criar novos clientes/equipamentos/testes neste navegador, eles também serão marcados como homologação.
+7. Ao terminar, volte em Configurações e clique em "Arquivar Homologação V1".
+8. Digite exatamente: ARQUIVAR V1
+9. Confirme que o modo volta para "Modo normal / produção".
+
+ANTES DOS DADOS REAIS
+Na tela Configurações > Dados de homologação, confirme:
+- Homologação V1 ativa: 0
+- Modo normal / produção
+
+A partir daí, novos cadastros são tratados como produção e não serão afetados por "Arquivar Homologação V1".
