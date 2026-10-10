@@ -1,0 +1,30 @@
+SAFETY - CONTROLE DE EQUIPAMENTOS
+V1 DEFINITIVA - HOTFIX 01
+Data: 10/10/2026
+
+Arquivos desta correção:
+- app.js
+- styles.css
+- sw.js
+
+NÃO substitua firebase-config.js. A chave Firebase corrigida em produção deve permanecer como está.
+NÃO é necessário alterar firestore.rules para este hotfix.
+
+Correções incluídas:
+1. Teste técnico: corrigido erro JavaScript "itens is not defined" tanto no teste de equipamento da Safety quanto no teste de assistência técnica.
+2. Geração de PDF: área de renderização passa a ser fixada em coordenadas A4 (topo/esquerda), sem herdar deslocamentos da interface; removido o comportamento que provocava recorte lateral.
+3. Prévia de modelos: o modal e a área de pré-visualização passam a abrir sempre no topo.
+4. Documentos: adicionada opção "Assinado fora do App" nas pendências e na janela do documento preparado.
+5. Ao marcar "Assinado fora do App", o documento sai de Pendências, vai para Histórico e grava data, usuário e auditoria, sem criar uma assinatura eletrônica falsa.
+6. Service Worker: versão do cache alterada para forçar a atualização dos arquivos após publicação.
+
+PUBLICAÇÃO:
+Substitua no repositório somente app.js, styles.css e sw.js pelos arquivos deste pacote.
+Depois aguarde o GitHub Pages publicar a alteração e faça uma recarga forçada no navegador (Ctrl+F5).
+Em celular/PWA, feche e reabra o aplicativo. Se necessário, abra primeiro pelo navegador para o novo service worker assumir o controle.
+
+RETESTE MÍNIMO:
+A) Salvar um teste técnico.
+B) Abrir a Prévia de um modelo e confirmar que inicia no topo.
+C) Gerar um PDF simples e um PDF com assinatura no computador.
+D) Marcar um documento pendente como "Assinado fora do App" e confirmar que ele aparece no Histórico com esse status.
