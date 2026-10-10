@@ -1,0 +1,67 @@
+SAFETY - CONTROLE DE EQUIPAMENTOS
+CHECKLIST DE HOMOLOGAÇÃO FINAL — V1 DEFINITIVA
+
+ANTES DOS TESTES
+[ ] Backup da versão publicada atual.
+[ ] Arquivos da V1 Definitiva publicados em ambiente de homologação.
+[ ] firestore.rules desta versão publicado no Firebase.
+[ ] Usuário Administrativo com matrícula/função preenchidos.
+[ ] Usuário Técnico com matrícula/função/perfil Técnico preenchidos.
+[ ] Ainda NÃO cadastrar a base real.
+
+CENÁRIO A — SEGURANÇA/PERFIS
+[ ] Administrativo visualiza todos os módulos.
+[ ] Técnico NÃO vê Locações, Cobranças, Auditoria, Usuários e Configurações.
+[ ] Técnico não vê indicadores financeiros no Dashboard.
+[ ] Tentativa direta de leitura de locações/cobranças com conta Técnica é negada pelas regras.
+[ ] Técnico consegue trabalhar com assistência/equipamentos/documentos técnicos.
+
+CENÁRIO B — LOCAÇÃO COMPLETA
+[ ] Solicitação pública é recebida e aparece no Dashboard/Solicitações.
+[ ] Solicitação converte em cliente sem redigitação.
+[ ] Equipamento disponível pode ser reservado/alugado.
+[ ] Equipamento comprometido não aparece como disponível para outra locação no mesmo período.
+[ ] Locação recebe protocolo LOC.
+[ ] Contrato/comprovante recebe protocolo DOC.
+[ ] Assinatura do técnico e cliente aparecem no PDF no celular.
+[ ] As mesmas assinaturas aparecem no PDF gerado pelo computador.
+[ ] Prorrogação cria histórico/movimentação.
+[ ] Alteração de responsável é salva e permite termo aditivo.
+[ ] Substituição é salva sem obrigar assinatura imediata.
+[ ] Devolução coloca o equipamento em Aguardando teste.
+[ ] Teste aprovado libera o equipamento corretamente.
+
+CENÁRIO C — COBRANÇAS
+[ ] Cliente filtra somente suas locações.
+[ ] Locação preenche valor contratual automaticamente.
+[ ] Valor contratual, valor atualizado e valor pago permanecem separados.
+[ ] Situações A vencer / Pago antes / no vencimento / após / Inadimplente estão corretas.
+[ ] Dashboard financeiro reflete as cobranças corretamente.
+
+CENÁRIO D — ASSISTÊNCIA
+[ ] Cliente rápido é criado com nome + telefone.
+[ ] Entrada recebe protocolo AT.
+[ ] Comprovante de entrada é gerado corretamente.
+[ ] Histórico do equipamento é localizado pelo número de série.
+[ ] Garantia exige registro de autorização do fabricante para avançar.
+[ ] Empréstimo usa somente equipamento disponível.
+[ ] Termo de empréstimo pode ser assinado ou gerado sem assinatura.
+[ ] Retorno do empréstimo deixa o ativo em Aguardando teste.
+[ ] Teste final é salvo corretamente.
+
+CENÁRIO E — DOCUMENTOS/MODELOS
+[ ] Modelos aparecem em Configurações > Modelos de Documentos.
+[ ] Versão Ativa não pode ser editada diretamente.
+[ ] Criar nova versão gera Rascunho.
+[ ] Nova versão pode ser pré-visualizada e ativada.
+[ ] Contrato antigo continua vinculado à versão original.
+[ ] Pendências exibe somente documentos com assinatura pendente.
+[ ] Histórico pesquisa por protocolo, cliente, série, técnico, tipo/status.
+
+CENÁRIO F — HOMOLOGAÇÃO/PRODUÇÃO
+[ ] Arquivar dados de teste exige a frase ARQUIVAR TESTES.
+[ ] Dados arquivados desaparecem da operação normal e Dashboard.
+[ ] Categorias, fabricantes, configurações e usuários permanecem.
+[ ] Exportações CSV não alteram dados.
+[ ] Após aprovação de todos os cenários, iniciar cadastro manual da base real.
+[ ] Somente depois da conferência mudar Status da base para Operacional.

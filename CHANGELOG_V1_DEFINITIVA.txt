@@ -1,0 +1,34 @@
+SAFETY - CONTROLE DE EQUIPAMENTOS
+CHANGELOG — V1 DEFINITIVA
+Data: 10/10/2026
+
+PRINCIPAIS ALTERAÇÕES
+- Perfis Administrativo e Técnico/Operacional, com bloqueios também no Firestore.
+- Usuários com matrícula, função e perfil de acesso.
+- Dashboard específico por perfil; financeiro oculto para Técnico.
+- Dados de homologação preservados e arquiváveis, sem exclusão física.
+- Protocolos legíveis LOC-AAAA-000001, AT-AAAA-000001 e DOC-AAAA-000001.
+- Equipamentos exibidos por Categoria · Modelo · Fabricante · Série · Tensão.
+- Regras controladas de disponibilidade/status e devolução para Aguardando teste.
+- Correção do salvamento do teste técnico com gravação em lote.
+- Cadastro completo e cadastro rápido/avulso de clientes.
+- Locações com busca, conflito de agenda, prorrogação registrada, alteração de responsável por histórico/aditivo e substituição sem assinatura forçada.
+- Cobranças com valor contratual, valor atualizado e valor pago separados.
+- Assistência técnica particular/garantia, histórico por série, autorização de fabricante e comprovante de entrada.
+- Empréstimos vinculados à assistência e retorno para Aguardando teste.
+- Modelos de documentos editáveis e versionados (Rascunho/Ativo/Arquivado).
+- Contrato de locação V1.0 revisado como modelo-base, sujeito à validação de advogado/OAB.
+- Central de Documentos com Pendências e Histórico, além de busca ampliada.
+- Assinaturas vetoriais renderizadas localmente no PDF para uniformizar celular/computador.
+- Técnico identificado nos documentos por nome, matrícula e função.
+- PDFs com cabeçalho e layout A4 revisados.
+- Auditoria com filtros por usuário, data e busca.
+- Exportação CSV administrativa somente leitura; importação em massa desativada na V1.
+- Operações de gravação bloqueadas quando o navegador estiver offline.
+- Webhook HTTPS configurável para aviso externo de nova solicitação pública.
+- Service Worker atualizado para novo cache da V1 Definitiva.
+
+OBSERVAÇÕES
+- Cloud Storage, anexos/fotos, integração automática Itaú e provedor externo avançado de assinatura permanecem fora da V1.
+- Não apague a versão vigente antes de concluir a homologação desta versão.
+- Publique o arquivo firestore.rules junto com o código antes de testar os perfis de acesso.

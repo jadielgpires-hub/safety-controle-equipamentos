@@ -1,55 +1,108 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
     function ceUser() {
       return request.auth != null
         && exists(/databases/$(database)/documents/ce_usuarios/$(request.auth.uid))
         && get(/databases/$(database)/documents/ce_usuarios/$(request.auth.uid)).data.ativo != false;
     }
-
     function ceAdmin() {
-      return ceUser()
-        && get(/databases/$(database)/documents/ce_usuarios/$(request.auth.uid)).data.admin == true;
+      return ceUser() && (
+        get(/databases/$(database)/documents/ce_usuarios/$(request.auth.uid)).data.admin == true
+        || get(/databases/$(database)/documents/ce_usuarios/$(request.auth.uid)).data.perfil == 'administrativo'
+      );
     }
 
-    // Pré-cadastro público: pode enviar, mas somente usuários internos podem consultar/alterar.
+    // Solicitação pública: somente criação externa; consulta e gestão apenas administrativa.
     match /ce_solicitacoes/{id} {
       allow create: if request.resource.data.status == 'Nova'
         && request.resource.data.nomeRazao is string
         && request.resource.data.cpfCnpj is string
         && request.resource.data.telefone is string
         && request.resource.data.email is string;
-      allow read, update, delete: if ceUser();
+      allow read, update: if ceAdmin();
+      allow delete: if false;
     }
 
-    // Categorias podem ser lidas pelo formulário público para exibir as opções.
+    // Categorias precisam ser públicas para o formulário externo.
     match /ce_categorias/{id} {
       allow read: if true;
-      allow create, update, delete: if ceUser();
+      allow create, update: if ceAdmin();
+      allow delete: if false;
     }
 
-    // O próprio usuário pode ler seu cadastro para concluir a autorização do login.
-    // Criação/alteração de usuários fica restrita aos administradores do aplicativo.
+    // O próprio usuário lê somente seu cadastro; listagem/gestão completa é administrativa.
     match /ce_usuarios/{uid} {
-      allow read: if request.auth != null && (request.auth.uid == uid || ceUser());
-      allow create, update, delete: if ceAdmin();
+      allow get: if request.auth != null && (request.auth.uid == uid || ceAdmin());
+      allow list: if ceAdmin();
+      allow create, update: if ceAdmin();
+      allow delete: if false;
     }
 
-    match /ce_clientes/{id}       { allow read, write: if ceUser(); }
-    match /ce_equipamentos/{id}   { allow read, write: if ceUser(); }
-    match /ce_locacoes/{id}       { allow read, write: if ceUser(); }
-    match /ce_assistencias/{id}   { allow read, write: if ceUser(); }
-    match /ce_cobrancas/{id}      { allow read, write: if ceUser(); }
-    match /ce_documentos/{id}     { allow read, write: if ceUser(); }
-    match /ce_testes/{id}         { allow read, write: if ceUser(); }
-    match /ce_vistorias/{id}      { allow read, write: if ceUser(); }
-    match /ce_movimentos/{id}     { allow read, write: if ceUser(); }
-    match /ce_fabricantes/{id}    { allow read, write: if ceUser(); }
-    match /ce_configuracoes/{id}  { allow read, write: if ceUser(); }
+    // Operação técnica.
+    match /ce_clientes/{id}      { allow read, create, update: if ceUser(); allow delete: if false; }
+    match /ce_equipamentos/{id}  { allow read, create, update: if ceUser(); allow delete: if false; }
+    match /ce_assistencias/{id}  { allow read, create, update: if ceUser(); allow delete: if false; }
+    match /ce_testes/{id}        { allow read, create, update: if ceUser(); allow delete: if false; }
+    match /ce_vistorias/{id}     { allow read, create, update: if ceUser(); allow delete: if false; }
+
+    // Financeiro e contratos de locação são sigilosos e restritos ao Administrativo.
+    match /ce_locacoes/{id}      { allow read, create, update: if ceAdmin(); allow delete: if false; }
+    match /ce_cobrancas/{id}     { allow read, create, update: if ceAdmin(); allow delete: if false; }
+
+    // Documentos técnicos podem ser lidos/gravados por técnicos quando explicitamente não financeiros.
+    match /ce_documentos/{id} {
+      allow read: if ceAdmin() || (ceUser() && resource.data.sigiloFinanceiro == false);
+      allow create: if ceAdmin() || (ceUser() && request.resource.data.sigiloFinanceiro == false);
+      allow update: if ceAdmin() || (ceUser()
+        && resource.data.sigiloFinanceiro == false
+        && request.resource.data.sigiloFinanceiro == false);
+      allow delete: if false;
+    }
+
+    // Movimentações de locação são sigilosas; técnicos só acessam movimentos técnicos explicitamente não financeiros.
+    match /ce_movimentos/{id} {
+      allow read: if ceAdmin() || (ceUser() && resource.data.sigiloFinanceiro == false);
+      allow create: if ceAdmin() || (ceUser()
+        && request.resource.data.sigiloFinanceiro == false
+        && request.resource.data.assistenciaId is string);
+      allow update: if ceAdmin() || (ceUser()
+        && resource.data.sigiloFinanceiro == false
+        && request.resource.data.sigiloFinanceiro == false
+        && resource.data.assistenciaId is string
+        && request.resource.data.assistenciaId == resource.data.assistenciaId);
+      allow delete: if false;
+    }
+
+    match /ce_fabricantes/{id} {
+      allow read: if ceUser();
+      allow create, update: if ceAdmin();
+      allow delete: if false;
+    }
+
+    // Configuração pública contém apenas dados necessários ao formulário externo (ex.: webhook).
+    match /ce_configuracoes/{id} {
+      allow read: if id == 'publico' || ceUser();
+      allow create, update: if ceAdmin();
+      allow delete: if false;
+    }
+
+    // Texto/modelos podem ser consultados por usuários internos; somente Administrativo publica versões.
+    match /ce_modelos_documentos/{id} {
+      allow read: if ceUser();
+      allow create, update: if ceAdmin();
+      allow delete: if false;
+    }
+
+    // Contadores geram protocolos LOC/AT/DOC. Técnico pode usar apenas AT e DOC; LOC é administrativo.
+    match /ce_contadores/{id} {
+      allow read, create, update: if ceAdmin() || (ceUser() && id.matches('^(AT|DOC)_[0-9]{4}$'));
+      allow delete: if false;
+    }
 
     match /ce_auditoria/{id} {
-      allow create, read: if ceUser();
+      allow create: if ceUser();
+      allow read: if ceAdmin();
       allow update, delete: if false;
     }
   }
