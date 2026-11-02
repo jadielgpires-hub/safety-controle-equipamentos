@@ -1,11 +1,11 @@
 /*
-  Safety - Controle de Equipamentos V1
+  Safety - Aluguel e Equipamentos V1.2
   Configuração do projeto Firebase exclusivo do Safety - Controle de Equipamentos.
   As coleções deste app usam o prefixo ce_.
 */
 window.SAFETY_CE_CONFIG = {
   firebase: {
-    apiKey: "AIzaSyCcwFtcdNVo4jJ0FSlWs0nmeNo89LIU704",
+    apiKey: "AIzaSyBTRYBX61wu453YjbT1o22W2dKxGqWLCSM",
     authDomain: "safety-equipamentos-sistema.firebaseapp.com",
     projectId: "safety-equipamentos-sistema",
     storageBucket: "safety-equipamentos-sistema.firebasestorage.app",
@@ -21,6 +21,6 @@ window.SAFETY_CE_CONFIG = {
     email: "equipamentossafety@gmail.com",
     phone: "(21) 2756-5524",
     whatsapp: "(21) 2456-5524",
-    address: "Rua José de Queiroz, 196 - Bento Ribeiro - Rio de Janeiro/RJ - CEP 21550-490"
+    address: "Rua José de Queiroz, 196 - Bento Ribeiro - Rio de Janeiro/RJ"
   }
 };

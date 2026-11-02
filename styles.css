@@ -27,3 +27,31 @@ label{font-size:12px;color:#314154;display:block;margin-top:9px;font-weight:700}
 /* V1 Definitiva */
 .connection-wrap{display:inline-flex}.conn{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;font-size:10px;font-weight:800}.conn.online{background:#e8f7ef;color:#147a4f}.conn.offline{background:#feeceb;color:#b42318}.search.compact{margin:5px 0 7px;min-height:34px;padding:7px 10px;font-size:12px}.inline-link{display:inline-block;margin:7px 0 0;text-align:left}.contract-editor{min-height:420px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;line-height:1.5}.model-preview{overflow:auto;max-height:70vh;padding:12px;background:#eef2f6;scrollbar-gutter:stable both-edges}.model-preview:before{content:"";display:block;height:1px}.model-preview .pdf-doc{margin:0 auto;box-shadow:0 5px 20px rgba(0,0,0,.12)}.rental-item{padding:10px;border:1px solid #e4e9ef;border-radius:10px;margin-bottom:8px}.audit-filters{margin-bottom:16px}.clickable{cursor:pointer}.pdf-doc{width:190mm;max-width:none;padding:0;margin:0;overflow-wrap:anywhere}.pdf-head{gap:16px;align-items:center}.pdf-head img{width:165px;max-height:75px;flex:0 0 auto}.pdf-head .company{flex:1;min-width:0;max-width:118mm;overflow-wrap:anywhere}.pdf-meta{font-size:10px;line-height:1.55;overflow-wrap:anywhere}.pdf-section,.pdf-meta,.pdf-signatures{break-inside:avoid-page;page-break-inside:avoid}.contract-body{font-size:10px;line-height:1.5;text-align:justify}.contract-body p{margin:0 0 10px}.pdf-table{table-layout:fixed}.pdf-table th,.pdf-table td{overflow-wrap:anywhere;vertical-align:top}.pdf-signatures{gap:18px;margin-top:34px}.pdf-sign img{width:190px;height:62px;object-fit:contain;display:block;margin:0 auto}.pdf-sign-space{height:62px}.pdf-line{min-height:40px;line-height:1.4}.pdf-value{font-size:18px}.tag{white-space:nowrap}
 @media(max-width:900px){.connection-wrap{display:none}.model-preview{padding:0}.model-preview .pdf-doc{min-width:720px}}
+
+/* =========================================================
+   V1.2 — simplicidade operacional + responsividade mobile
+   ========================================================= */
+.quick-actions{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 18px}.compact-table{width:100%;border-collapse:collapse}.compact-table th,.compact-table td{padding:9px 8px;border-bottom:1px solid var(--line);font-size:12px}.more-actions{margin-top:18px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fafbfd}.more-actions summary{cursor:pointer;font-weight:800;color:var(--blue)}.pad-top{padding-top:10px}.responsavel-row{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;background:#fafbfd}.resp-actions{display:flex;align-items:end;gap:8px;flex-wrap:wrap}.doc-choice-grid,.doc-flow-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.doc-flow-options{grid-template-columns:repeat(3,minmax(0,1fr));margin-top:16px}.option-card{border:1px solid #cfd9e5;background:#fff;border-radius:14px;padding:16px;text-align:left;min-height:110px;color:var(--ink)}.option-card:hover{border-color:var(--blue2);box-shadow:0 4px 14px rgba(7,59,115,.1)}.option-card b{display:block;color:var(--blue);margin-bottom:7px}.option-card span{display:block;color:var(--muted);font-size:12px;line-height:1.45}.admin-links{display:flex;gap:8px;flex-wrap:wrap}.search-result{display:block;width:100%;padding:10px 12px;margin:5px 0;border:1px solid var(--line);border-radius:10px;background:#fff;text-align:left;color:var(--ink)}.search-result:hover{background:#f5f8fb}.metric small{display:block;margin-top:4px;color:var(--muted);font-weight:500}.config-block{scroll-margin-top:100px}
+.pdf-doc{width:794px!important;max-width:794px!important;padding:32px!important;margin:0!important;box-sizing:border-box!important;overflow:visible!important}.pdf-head{width:100%;box-sizing:border-box}.pdf-head .company{max-width:430px}.pdf-table{width:100%!important;table-layout:fixed}.pdf-title,.pdf-meta,.pdf-section,.contract-body{max-width:100%;box-sizing:border-box}.pdf-section p,.contract-body p{overflow-wrap:anywhere;word-break:normal}.pdf-signatures{break-inside:avoid;page-break-inside:avoid}.pdf-footer{break-inside:avoid}
+
+@media(max-width:900px){
+  table{display:block;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap}
+  table td,table th{white-space:normal;min-width:110px}
+  .inline-actions{gap:6px}.inline-actions .btn{flex:0 0 auto}
+  .doc-flow-options,.doc-choice-grid{grid-template-columns:1fr}
+  .quick-actions .btn{flex:1 1 160px}
+  .model-preview{overflow:auto;max-height:75vh;padding:8px}.model-preview .pdf-doc{min-width:794px}
+}
+@media(max-width:600px){
+  .topbar{height:72px}.topbar-left{min-width:0}.topbar-left>div{min-width:0}.topbar h1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:55vw}
+  #main{padding:14px 10px 90px}.card{padding:14px 12px}.row{gap:10px}.row>.inline-actions{width:100%;justify-content:flex-start!important}
+  .quick-actions{display:grid;grid-template-columns:1fr}.quick-actions .btn{width:100%}
+  .metric-row{grid-template-columns:1fr 1fr}.metric{min-width:0}
+  .rental-item{display:grid;grid-template-columns:1fr;gap:8px}.rental-item>.btn{width:100%}
+  .responsavel-row{grid-template-columns:1fr!important}.resp-actions{align-items:center}
+  .modal-foot{display:flex;gap:7px;flex-wrap:wrap;padding:10px}.modal-foot .btn{flex:1 1 44%;min-width:120px}
+  .modal-head{padding:12px 14px}.modal-body{padding:14px}.signature-canvas{height:220px}
+  .kpis{grid-template-columns:1fr 1fr}.kpi{padding:13px}.kpi .v{font-size:24px}
+  .pdf-doc{font-size:11px!important}
+}
+@media(max-width:420px){.kpis,.metric-row{grid-template-columns:1fr}.modal-foot .btn{flex:1 1 100%}.logout-btn{padding:7px 9px}.user-avatar{width:32px;height:32px}}
