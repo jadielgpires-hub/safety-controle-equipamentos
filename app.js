@@ -454,7 +454,7 @@ COLS.contadores = C('contadores');
 data.modelosDocumentos = data.modelosDocumentos || [];
 data.contadores = data.contadores || [];
 PAGE_TITLES.modelos = 'Modelos de Documentos';
-const APP_VERSION = 'V1.2';
+const APP_VERSION = 'V1.2.1';
 let showArchivedRecords = false;
 let publicRuntimeConfig = {};
 
@@ -1092,4 +1092,241 @@ const _viewUsuariosBase=viewUsuarios;
 viewUsuarios=function(){const html=_viewUsuariosBase();if(typeof html!=='string'||html.includes('Acesso restrito'))return html;return html.replace('<div class="card"><div class="row">','<div class="card"><input class="search" placeholder="Pesquisar usuário, matrícula, função ou perfil..." oninput="filterTable(\'usrTable\',this.value)"><div class="row">').replace('<table><thead>','<table id="usrTable"><thead>').replace(/<tr><td><b>/g,'<tr data-search=""><td><b>')}
 const _viewModelosBase=viewModelosDocumentos;
 viewModelosDocumentos=function(){const html=_viewModelosBase();if(typeof html!=='string'||html.includes('Acesso restrito'))return html;return html.replace('<div class="card"><div class="row">','<div class="card"><input class="search" placeholder="Pesquisar modelo, versão, status ou revisor..." oninput="filterTable(\'modelsTable\',this.value)"><div class="row">').replace('<table><thead>','<table id="modelsTable"><thead>')}
+
+
+// ============================================================
+// V1.2.1 — Correções consolidadas da homologação de 02/11/2026
+// ============================================================
+
+// Técnico precisa consultar e operar locações, sem acesso comercial/financeiro.
+ADMIN_ONLY_PAGES.delete('locacoes');
+
+function v121MergeById(...lists){
+  const m=new Map();
+  lists.flat().filter(Boolean).forEach(x=>m.set(x.id,x));
+  return [...m.values()];
+}
+async function v121Query(col,field,value){
+  try{const s=await db.collection(col).where(field,'==',value).get();return s.docs.map(d=>({id:d.id,...d.data()}))}
+  catch(e){console.warn(`consulta ${col}.${field}`,e);return[]}
+}
+
+// Carregamento segmentado: técnico recebe locações e somente documentos/movimentos operacionais.
+async function carregarDados(){
+  const common=[['clientes',COLS.clientes],['equipamentos',COLS.equipamentos],['equipClientes',COLS.equipClientes],['categorias',COLS.categorias],['assistencias',COLS.assistencias],['testes',COLS.testes],['vistorias',COLS.vistorias],['fabricantes',COLS.fabricantes],['configuracoes',COLS.configuracoes],['modelosDocumentos',COLS.modelosDocumentos]];
+  for(const [k,col] of common)await carregarColecao(k,col);
+  if(isAdmin()){
+    await Promise.all([
+      carregarColecao('solicitacoes',COLS.solicitacoes),carregarColecao('locacoes',COLS.locacoes),
+      carregarColecao('cobrancas',COLS.cobrancas),carregarColecao('documentos',COLS.documentos),
+      carregarColecao('movimentos',COLS.movimentos),carregarColecao('usuarios',COLS.usuarios),
+      carregarColecao('auditoria',COLS.auditoria)
+    ]);
+  }else{
+    data.solicitacoes=[];data.cobrancas=[];data.auditoria=[];
+    await carregarColecao('locacoes',COLS.locacoes);
+    const [docsVis,docsLegacy,movVis,movLegacy]=await Promise.all([
+      v121Query(COLS.documentos,'visibilidadeTecnico',true),v121Query(COLS.documentos,'sigiloFinanceiro',false),
+      v121Query(COLS.movimentos,'visibilidadeTecnico',true),v121Query(COLS.movimentos,'sigiloFinanceiro',false)
+    ]);
+    data.documentos=v121MergeById(docsVis,docsLegacy);
+    data.movimentos=v121MergeById(movVis,movLegacy);
+    try{const s=await db.collection(COLS.usuarios).doc(currentUser.uid).get();data.usuarios=s.exists?[{id:s.id,...s.data()}]:[]}catch(e){data.usuarios=[]}
+  }
+  await bootstrapDefaults();
+}
+
+// ---------- Integridade dos estados dos equipamentos ----------
+function v121EquipmentCommitment(equipId){
+  const loc=(data.locacoes||[]).find(l=>!isArchived(l)&&!RENTAL_CLOSED_STATUSES.has(l.status)&&(l.itens||[]).some(i=>i.equipamentoId===equipId));
+  if(loc)return {tipo:'locacao',registro:loc};
+  const emp=(data.movimentos||[]).find(m=>!isArchived(m)&&m.tipo==='Empréstimo'&&m.equipamentoId===equipId&&m.status!=='Devolvido');
+  if(emp)return {tipo:'emprestimo',registro:emp};
+  return null;
+}
+function v121TestBlockReason(e){
+  if(!e)return'Equipamento não encontrado.';
+  if(['Reservado','Alugado','Emprestado'].includes(e.situacao))return `O equipamento está ${e.situacao}. Finalize a entrega/devolução, substituição ou empréstimo antes de realizar o teste.`;
+  const vinc=v121EquipmentCommitment(e.id);
+  if(vinc)return vinc.tipo==='locacao'?'Este equipamento possui uma locação ativa/reservada. Finalize a operação ou substitua o equipamento antes de realizar o teste.':'Este equipamento possui um empréstimo em aberto. Registre a devolução antes do teste.';
+  return'';
+}
+function novoTeste(equipId){
+  const e=find('equipamentos',equipId),block=v121TestBlockReason(e);
+  if(block)return alert(block);
+  const cat=find('categorias',e?.categoriaId),items=cat?.itensTeste||[];
+  abrirModal('Registrar teste técnico',`<p><b>${esc(equipName(equipId))}</b></p><div class="grid2"><div><label>Data</label><input id="tData" type="date" value="${todayISO()}"></div><div><label>Tipo</label><select id="tTipo"><option>Teste técnico</option><option>Teste de bancada</option><option>Liberação técnica</option><option>Preventiva</option><option>Teste final</option></select></div></div>${items.length?`<div class="section-title">Parâmetros da categoria</div><div class="check-grid">${items.map((x,i)=>`<div><label>${esc(x)}</label><input id="ti${i}" placeholder="Resultado / valor"></div>`).join('')}</div>`:''}<label>Resultado *</label><select id="tResultado"><option>Aprovado</option><option>Reprovado</option></select><label>Observação</label><textarea id="tObs"></textarea><div class="notice blue" style="margin-top:12px">A situação será definida automaticamente: Aprovado → Disponível; Reprovado → Em manutenção.</div>`,`<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="salvarTeste('${equipId}')">Salvar teste</button>`);
+}
+async function salvarTeste(equipId){
+  try{
+    requireOnline();
+    const e=find('equipamentos',equipId),block=v121TestBlockReason(e);if(block)return alert(block);
+    const cat=find('categorias',e?.categoriaId),items=(cat?.itensTeste||[]).map((x,i)=>({item:x,valor:$(`ti${i}`)?.value||''})),resultado=$('tResultado').value,situacao=resultado==='Aprovado'?'Disponível':'Em manutenção';
+    const ref=db.collection(COLS.testes).doc(),obj=withEnvironment({equipamentoId:equipId,categoriaId:e.categoriaId,serial:e.serial,data:$('tData').value,tipo:$('tTipo').value,itens:items,observacoes:$('tObs').value.trim(),resultado,situacaoAnterior:e.situacao,situacaoPosterior:situacao,tecnicoUid:currentUser.uid,tecnicoNome:currentUser.nome,tecnicoMatricula:currentUser.matricula||'',tecnicoFuncao:currentUser.funcao||'',ativo:true,criadoEm:nowISO(),criadoPor:currentUser.uid});
+    // Revalidação antes do commit impede corrida/atalho de status.
+    const fresh=await db.collection(COLS.equipamentos).doc(equipId).get(),freshData=fresh.exists?{id:fresh.id,...fresh.data()}:e;
+    if(['Reservado','Alugado','Emprestado'].includes(freshData.situacao))return alert(`O equipamento passou para ${freshData.situacao}. O teste foi cancelado para preservar o vínculo operacional.`);
+    const locSnap=await db.collection(COLS.locacoes).get();
+    const linked=locSnap.docs.some(d=>{const l=d.data();return l.arquivado!==true&&l.ativo!==false&&!RENTAL_CLOSED_STATUSES.has(l.status)&&(l.itens||[]).some(i=>i.equipamentoId===equipId)});
+    if(linked)return alert('Existe locação operacional vinculada a este equipamento. Finalize a operação antes do teste.');
+    const batch=db.batch();batch.set(ref,obj);batch.set(db.collection(COLS.equipamentos).doc(equipId),{situacao,localAtual:situacao==='Disponível'?'Safety':freshData.localAtual||'Safety',alteradoEm:nowISO(),alteradoPor:currentUser.uid},{merge:true});await batch.commit();
+    await audit('teste','Equipamentos',equipId,`Teste ${obj.tipo}: ${resultado}. Situação ${e.situacao} → ${situacao}.`);fecharModal();await refresh('Teste registrado. Situação atualizada automaticamente.');
+  }catch(err){console.error(err);alert('Não foi possível salvar o teste: '+err.message)}
+}
+
+// ---------- Mensalidades, vencimentos, prorrogação e valor ----------
+function v121DateAddMonths(dateStr,months){
+  const [y,m,d]=dateStr.split('-').map(Number),target=new Date(y,m-1+months,1),last=new Date(target.getFullYear(),target.getMonth()+1,0).getDate();
+  return `${target.getFullYear()}-${String(target.getMonth()+1).padStart(2,'0')}-${String(Math.min(d,last)).padStart(2,'0')}`;
+}
+function v121MaxDate(a,b){return !a?b:!b?a:(a>b?a:b)}
+function locValorEm(l,date){
+  const hist=[...(l?.historicoValores||[])].filter(x=>x.vigencia&&x.vigencia<=date&&(!x.fimVigencia||date<=x.fimVigencia)).sort((a,b)=>a.vigencia.localeCompare(b.vigencia)||(a.em||'').localeCompare(b.em||''));
+  return hist.length?Number(hist[hist.length-1].valor||0):Number(l?.valorMensalVigente||0);
+}
+function v121RentalDueDates(l){
+  if(!l?.inicio||!l?.termino)return[];
+  const short=daysBetween(l.inicio,l.termino)<=30;
+  if(l.primeiroVencimento){
+    if(short)return[l.primeiroVencimento];
+    const out=[l.primeiroVencimento],dia=Number(l.diaVencimento||l.primeiroVencimento.slice(8,10));
+    for(let i=1;i<240;i++){const base=v121DateAddMonths(l.primeiroVencimento,i),d=dueDateForMonth(base.slice(0,7),dia);if(d>=l.termino)break;out.push(d)}
+    return out;
+  }
+  // Compatibilidade com locações criadas antes desta correção.
+  const seq=short?[l.inicio.slice(0,7)]:monthSequence(l.inicio,l.termino);
+  return seq.map((ym,idx)=>idx===0?l.inicio:dueDateForMonth(ym,l.diaVencimento||15));
+}
+async function sincronizarMensalidadesLocacao(id,l=null){
+  l=l||find('locacoes',id);if(!l)return;
+  const dues=v121RentalDueDates(l);
+  for(const due of dues){
+    const ym=due.slice(0,7),existing=(data.cobrancas||[]).find(c=>c.locacaoId===id&&c.competencia===ym&&!isArchived(c)),valor=locValorEm(l,due);
+    if(existing){if(!existing.pagoEm)await setDoc(COLS.cobrancas,existing.id,{vencimento:existing.vencimentoManual?existing.vencimento:due,valorContrato:valor,valor,locacaoProtocolo:l.protocolo||''});continue}
+    await addDoc(COLS.cobrancas,{clienteId:l.clienteId,locacaoId:id,locacaoProtocolo:l.protocolo||'',competencia:ym,vencimento:due,valorContrato:valor,valor,ativo:true,arquivado:false});
+  }
+}
+function editarLocacao(id=''){
+  if(id){const l=find('locacoes',id);return abrirModal(`Observações · ${l.protocolo||id}`,`<div class="notice blue">Alterações contratuais devem ser feitas pelos comandos específicos da locação. Aqui é possível editar somente observações administrativas.</div><label>Observações</label><textarea id="lObsEdit">${esc(l.observacoes||'')}</textarea>`,`<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="salvarObservacoesLocacao('${id}')">Salvar observações</button>`)}
+  const l={},cli={};
+  abrirModal('Nova locação',`<div class="grid2"><div><label>Cliente *</label><input class="search compact" placeholder="Pesquisar cliente..." oninput="filterSelectOptions('lCliente',this.value)"><select id="lCliente" onchange="preencherDadosLocClienteV12()"><option value="">Selecione</option>${selectOptions(active('clientes').filter(c=>c.cadastroNivel!=='rapido'||c.cpfCnpj),'',c=>c.nomeRazao+' · '+(c.cpfCnpj||''))}</select></div><div><label>Responsável *</label><select id="lResp"><option value="">Selecione</option></select></div><div><label>Data inicial *</label><input id="lInicio" type="date" value="${todayISO()}" onchange="const v=$('lPrimeiroVenc');if(v&&!v.dataset.touched)v.value=this.value"></div><div><label>Data final prevista *</label><input id="lTermino" type="date"></div><div><label>Primeiro vencimento *</label><input id="lPrimeiroVenc" type="date" value="${todayISO()}" onchange="this.dataset.touched='1'"></div><div><label>Valor mensal total *</label><input id="lValorTotal" inputmode="decimal"></div></div><div class="section-title">Endereço de instalação</div>${addressForm('lInst',{})}<div class="section-title">Equipamentos</div>${rentalItemsHtmlV12([])}<label>Observações</label><textarea id="lObs"></textarea>`,`<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="salvarLocacao('')">Salvar locação</button>`)
+}
+async function salvarObservacoesLocacao(id){const l=find('locacoes',id),obs=$('lObsEdit').value.trim();await setDoc(COLS.locacoes,id,{observacoes:obs});await audit('observacoes','Locações',id,`${l.protocolo||id}: observações atualizadas.`);fecharModal();await refresh('Observações atualizadas.')}
+async function salvarLocacao(id){
+  if(id)return alert('Para preservar o histórico, utilize as ações específicas da locação.');
+  try{
+    requireOnline();const cli=$('lCliente').value,itens=collectRentalItemsV12(),inicio=$('lInicio').value,termino=$('lTermino').value,primeiro=$('lPrimeiroVenc').value,valor=num($('lValorTotal').value);
+    if(!cli||!inicio||!termino||!primeiro||!itens.length||valor<=0)return alert('Informe cliente, período, primeiro vencimento, valor e ao menos um equipamento.');
+    if(termino<inicio)return alert('A data final não pode ser anterior à inicial.');if(primeiro<inicio)return alert('O primeiro vencimento não pode ser anterior ao início da locação.');
+    if(new Set(itens.map(i=>i.equipamentoId)).size!==itens.length)return alert('O mesmo equipamento não pode ser incluído duas vezes.');
+    const conflict=itens.find(i=>equipmentHasConflict(i.equipamentoId,inicio,termino,''));if(conflict)return alert(`O equipamento ${equipName(conflict.equipamentoId)} já possui compromisso nesse período.`);
+    for(const i of itens){const e=find('equipamentos',i.equipamentoId);if(e?.situacao!=='Disponível')return alert(`O equipamento ${equipName(i.equipamentoId)} não está disponível.`)}
+    const protocolo=await nextProtocol('LOC'),status=inicio>todayISO()?'Reservada':'Ativa',hist=[{valor,valorAnterior:null,vigencia:inicio,motivo:'Valor inicial da locação',em:nowISO(),uid:currentUser.uid,nome:currentUser.nome}],obj={clienteId:cli,protocolo,responsavel:$('lResp').value,inicio,termino,primeiroVencimento:primeiro,diaVencimento:Number(primeiro.slice(8,10)),tipoDocumento:daysBetween(inicio,termino)<=30?'30dias':'contrato',status,enderecoInstalacao:modalAddress('lInst'),itens,valorMensalVigente:valor,historicoValores:hist,observacoes:$('lObs').value.trim(),prorrogacoes:[],responsaveisHistorico:[],ativo:true,arquivado:false};
+    const ref=db.collection(COLS.locacoes).doc(),lid=ref.id,batch=db.batch();batch.set(ref,{...obj,criadoEm:nowISO(),criadoPor:currentUser.uid});
+    for(const i of itens)batch.set(db.collection(COLS.equipamentos).doc(i.equipamentoId),{situacao:status==='Ativa'?'Alugado':'Reservado',localAtual:status==='Ativa'?formatAddress(obj.enderecoInstalacao):'Safety',alteradoEm:nowISO(),alteradoPor:currentUser.uid},{merge:true});
+    await batch.commit();await sincronizarMensalidadesLocacao(lid,{...obj,id:lid});await audit('criar','Locações',lid,`${protocolo} criada.`);fecharModal();await refresh(`Locação ${protocolo} salva.`)
+  }catch(e){console.error(e);alert('Não foi possível salvar a locação: '+e.message)}
+}
+async function prorrogarLocacao(id){
+  const l=find('locacoes',id);if(!isAdmin())return alert('Prorrogação é uma condição comercial e deve ser feita pelo Administrativo.');
+  const nova=prompt('Nova data final (AAAA-MM-DD):',l.termino);if(!nova||nova<=l.termino)return;
+  if((l.itens||[]).some(i=>equipmentHasConflict(i.equipamentoId,l.termino,nova,id)))return alert('Existe conflito de agenda para um dos equipamentos no novo período.');
+  const hist=[...(l.prorrogacoes||[]),{de:l.termino,para:nova,em:nowISO(),uid:currentUser.uid,nome:currentUser.nome}];await setDoc(COLS.locacoes,id,{termino:nova,prorrogacoes:hist});await refresh(null,false);await sincronizarMensalidadesLocacao(id,find('locacoes',id));await audit('prorrogar','Locações',id,`${l.protocolo||id}: ${dateBR(l.termino)} → ${dateBR(nova)}.`);await refresh('Locação prorrogada e novas mensalidades geradas.')
+}
+async function alterarValorLocacao(id){
+  if(!isAdmin())return alert('A alteração de valor é restrita ao Administrativo.');
+  const l=find('locacoes',id),anterior=locValorAtual(l),novo=num(prompt('Novo valor mensal total:',String(anterior).replace('.',',')));if(!novo||novo<=0)return;
+  let vig=prompt('Data de início da vigência (AAAA-MM-DD):',v121MaxDate(todayISO(),l.inicio));if(!vig)return;vig=v121MaxDate(vig,l.inicio);
+  const motivo=(prompt('Motivo da alteração (ex.: desconto temporário, renegociação):','')||'').trim();if(!motivo)return;
+  const hist=[...(l.historicoValores||[]),{valor:novo,valorAnterior:anterior,vigencia:vig,motivo,em:nowISO(),uid:currentUser.uid,nome:currentUser.nome}];await setDoc(COLS.locacoes,id,{valorMensalVigente:novo,historicoValores:hist});await refresh(null,false);await sincronizarMensalidadesLocacao(id,find('locacoes',id));await audit('alterar_valor','Locações',id,`${l.protocolo||id}: ${brl(anterior)} → ${brl(novo)} a partir de ${dateBR(vig)}. ${motivo}`);await refresh('Valor atualizado. Parcelas pagas foram preservadas e as futuras recalculadas.')
+}
+function alterarVencimentoMensalidade(cid){
+  if(!isAdmin())return alert('Alteração de vencimento é restrita ao Administrativo.');const c=find('cobrancas',cid);if(!c||c.pagoEm)return;
+  abrirModal('Alterar vencimento',`<p><b>${monthLabel(c.competencia)}</b> · atual ${dateBR(c.vencimento)}</p><label>Novo vencimento *</label><input id="nvData" type="date" value="${esc(c.vencimento)}"><label>Aplicar a</label><select id="nvEscopo"><option value="esta">Somente esta mensalidade</option><option value="futuras">Esta e as próximas mensalidades</option></select><label>Motivo / observação</label><textarea id="nvObs"></textarea>`,`<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="salvarAlteracaoVencimento('${cid}')">Salvar</button>`)
+}
+async function salvarAlteracaoVencimento(cid){
+  const c=find('cobrancas',cid),nova=$('nvData').value,escopo=$('nvEscopo').value,obs=$('nvObs').value.trim();if(!nova)return alert('Informe o novo vencimento.');const l=find('locacoes',c.locacaoId),alvos=active('cobrancas').filter(x=>x.locacaoId===c.locacaoId&&!x.pagoEm&&(escopo==='esta'?x.id===cid:x.vencimento>=c.vencimento));
+  const batch=db.batch();for(const x of alvos){const dataNova=x.id===cid?nova:dueDateForMonth(x.competencia,Number(nova.slice(8,10)));batch.set(db.collection(COLS.cobrancas).doc(x.id),{vencimento:dataNova,vencimentoManual:true,alteradoEm:nowISO(),alteradoPor:currentUser.uid},{merge:true})}if(escopo==='futuras')batch.set(db.collection(COLS.locacoes).doc(c.locacaoId),{diaVencimento:Number(nova.slice(8,10)),alteradoEm:nowISO(),alteradoPor:currentUser.uid},{merge:true});await batch.commit();await audit('alterar_vencimento','Locações',c.locacaoId,`${l?.protocolo||c.locacaoId}: vencimento ${dateBR(c.vencimento)} → ${dateBR(nova)} (${escopo==='futuras'?'esta e futuras':'somente esta'}). ${obs}`);fecharModal();await refresh('Vencimento atualizado.')
+}
+function monthlyRows(l){
+  const cb=active('cobrancas').filter(x=>x.locacaoId===l.id).sort((a,b)=>(a.vencimento||'').localeCompare(b.vencimento||''));
+  return cb.length?`<table class="compact-table"><thead><tr><th>Competência</th><th>Vencimento</th><th>Valor</th><th>Situação</th><th>Ações</th></tr></thead><tbody>${cb.map(c=>`<tr><td>${monthLabel(c.competencia)}</td><td>${dateBR(c.vencimento)}</td><td>${brl(c.pagoEm?(c.valorPago||c.valorContrato||c.valor):(c.valorContrato||c.valor))}</td><td>${tag(paymentStatus(c),statusType(paymentStatus(c)))}</td><td><div class="inline-actions">${!c.pagoEm?`<button class="btn small" onclick="fecharModal();registrarPagamento('${c.id}')">Marcar como pago</button><button class="btn small ghost" onclick="fecharModal();alterarVencimentoMensalidade('${c.id}')">Alterar vencimento</button>`:`<button class="btn small ghost" onclick="fecharModal();gerarReciboPagamento('${c.id}','locacao')">Gerar recibo</button>`}</div></td></tr>`).join('')}</tbody></table>`:empty('Sem mensalidades.')
+}
+
+// ---------- Locações: administrativo completo / técnico operacional ----------
+function viewLocacoes(){
+  const rows=active('locacoes').filter(l=>clienteOperacional(l.clienteId)).sort((a,b)=>(b.inicio||'').localeCompare(a.inicio||''));
+  if(!isAdmin())return `<div class="card"><div><h2>Locações</h2><p class="hint">Visão operacional para entrega, retirada e substituição de equipamentos.</p></div><input class="search" placeholder="Pesquisar protocolo, cliente, responsável, série ou status..." oninput="filterTable('locTable',this.value)">${rows.length?`<table id="locTable"><thead><tr><th>Locação / Cliente</th><th>Período</th><th>Equipamentos</th><th>Status</th><th>Ações</th></tr></thead><tbody>${rows.map(l=>`<tr data-search="${esc([l.protocolo,clientName(l.clienteId),l.responsavel,l.status,...(l.itens||[]).map(i=>i.serialSnapshot)].join(' '))}"><td><b>${esc(l.protocolo||l.id)}</b><br>${esc(clientName(l.clienteId))}<br><span class="muted">${esc(l.responsavel||'')}</span></td><td>${dateBR(l.inicio)} → ${dateBR(l.termino)}</td><td>${(l.itens||[]).map(i=>`<div>${esc(i.serialSnapshot||'—')}</div>`).join('')}</td><td>${tag(l.status||'Ativa',statusType(l.status))}</td><td><button class="btn small ghost" onclick="detalharLocacao('${l.id}')">Abrir</button></td></tr>`).join('')}</tbody></table>`:empty('Nenhuma locação operacional.')}</div>`;
+  return `<div class="card"><div class="row"><div><h2>Locações</h2><p class="hint">Cliente → equipamento → período → valor → endereço. O restante é controlado pelo sistema.</p></div><button class="btn" onclick="editarLocacao()">+ Nova locação</button></div><input class="search" placeholder="Pesquisar protocolo, cliente, responsável, série ou status..." oninput="filterTable('locTable',this.value)">${rows.length?`<table id="locTable"><thead><tr><th>Locação / Cliente</th><th>Período</th><th>Equipamentos</th><th>Valor mensal</th><th>Status</th><th>Ações</th></tr></thead><tbody>${rows.map(l=>`<tr data-search="${esc([l.protocolo,clientName(l.clienteId),l.responsavel,l.status,...(l.itens||[]).map(i=>i.serialSnapshot)].join(' '))}"><td><b>${esc(l.protocolo||l.id)}</b><br>${esc(clientName(l.clienteId))}<br><span class="muted">${esc(l.responsavel||'')}</span></td><td>${dateBR(l.inicio)} → ${dateBR(l.termino)}</td><td>${(l.itens||[]).map(i=>`<div>${esc(i.serialSnapshot||'—')}</div>`).join('')}</td><td><b>${brl(locValorAtual(l))}</b></td><td>${tag(l.status||'Ativa',statusType(l.status))}</td><td><button class="btn small ghost" onclick="detalharLocacao('${l.id}')">Abrir</button></td></tr>`).join('')}</tbody></table>`:empty('Nenhuma locação cadastrada.')}</div>`
+}
+async function registrarEntregaLocacao(id){
+  const l=find('locacoes',id);if(!l||l.status==='Ativa'||RENTAL_CLOSED_STATUSES.has(l.status))return;
+  if(l.inicio>todayISO()&&!confirm(`A locação inicia em ${dateBR(l.inicio)}. Confirmar entrega antecipada mesmo assim?`))return;
+  const batch=db.batch();batch.set(db.collection(COLS.locacoes).doc(id),{status:'Ativa',entregueEm:nowISO(),entreguePor:currentUser.uid,alteradoEm:nowISO(),alteradoPor:currentUser.uid},{merge:true});for(const i of l.itens||[])batch.set(db.collection(COLS.equipamentos).doc(i.equipamentoId),{situacao:'Alugado',localAtual:formatAddress(l.enderecoInstalacao),alteradoEm:nowISO(),alteradoPor:currentUser.uid},{merge:true});await batch.commit();await audit('entrega','Locações',id,`${l.protocolo||id}: entrega registrada por ${currentUser.nome}.`);await refresh(null,false);if(confirm('Entrega registrada. Deseja gerar o Comprovante de Entrega?'))gerarComprovanteEntregaLocacao(id);else toast('Entrega registrada.')
+}
+function detalharLocacao(id){
+  const l=find('locacoes',id);if(!l)return;
+  const equipamentos=(l.itens||[]).map(i=>`<div class="metric"><span>${esc(i.serialSnapshot||'')}</span><strong style="font-size:13px">${esc(i.descricaoSnapshot||equipName(i.equipamentoId))}</strong></div>`).join('');
+  if(!isAdmin())return abrirModal(`Locação · ${l.protocolo||id}`,`<div class="grid2"><div><p>${tag(l.status,statusType(l.status))}</p><p><b>${esc(clientName(l.clienteId))}</b><br>${esc(l.responsavel||'—')}</p><p>${dateBR(l.inicio)} → ${dateBR(l.termino)}</p><p>${esc(formatAddress(l.enderecoInstalacao))}</p></div><div><div class="notice blue">Acesso operacional: valores, mensalidades e condições comerciais ficam restritos ao Administrativo.</div></div></div><div class="section-title">Equipamentos</div>${equipamentos}`,`<button class="btn ghost" onclick="fecharModal()">Fechar</button>${l.status==='Reservada'?`<button class="btn" onclick="fecharModal();registrarEntregaLocacao('${id}')">Registrar entrega</button>`:''}<button class="btn gold" onclick="fecharModal();gerarComprovanteEntregaLocacao('${id}')">Comprovante de entrega</button>${!RENTAL_CLOSED_STATUSES.has(l.status)?`<button class="btn ghost" onclick="fecharModal();trocarEquipamento('${id}')">Substituir equipamento</button><button class="btn danger" onclick="fecharModal();encerrarLocacaoV12('${id}')">Registrar retirada / encerrar</button>`:''}`);
+  abrirModal(`Locação · ${l.protocolo||id}`,`<div class="grid2"><div><p>${tag(l.status,statusType(l.status))}</p><p><b>${esc(clientName(l.clienteId))}</b><br>${esc(l.responsavel||'—')}</p><p>${dateBR(l.inicio)} → ${dateBR(l.termino)}</p><p>${esc(formatAddress(l.enderecoInstalacao))}</p></div><div class="metric-row"><div class="metric"><span>Valor mensal vigente</span><strong>${brl(locValorAtual(l))}</strong></div><div class="metric"><span>Equipamentos</span><strong>${(l.itens||[]).length}</strong></div></div></div><div class="section-title">Equipamentos</div>${equipamentos}<div class="section-title">Mensalidades</div>${monthlyRows(l)}<details class="more-actions"><summary>Mais ações</summary><div class="inline-actions pad-top"><button class="btn small ghost" onclick="fecharModal();prorrogarLocacao('${id}')">Prorrogar</button><button class="btn small ghost" onclick="fecharModal();trocarResponsavelLocacaoV12('${id}')">Alterar responsável</button><button class="btn small ghost" onclick="fecharModal();alterarEnderecoLocacao('${id}')">Alterar endereço</button><button class="btn small ghost" onclick="fecharModal();alterarValorLocacao('${id}')">Alterar valor</button><button class="btn small ghost" onclick="fecharModal();editarLocacao('${id}')">Editar observações</button></div></details>`,`<button class="btn ghost" onclick="fecharModal()">Fechar</button>${l.status==='Reservada'?`<button class="btn" onclick="fecharModal();registrarEntregaLocacao('${id}')">Registrar entrega</button>`:''}<button class="btn gold" onclick="fecharModal();gerarDocumentoLocacao('${id}')">Gerar documento</button>${!RENTAL_CLOSED_STATUSES.has(l.status)?`<button class="btn ghost" onclick="fecharModal();trocarEquipamento('${id}')">Substituir equipamento</button><button class="btn danger" onclick="fecharModal();encerrarLocacaoV12('${id}')">Encerrar locação</button>`:''}`)
+}
+async function salvarTroca(locId){
+  try{const l=find('locacoes',locId),oldId=$('trOld').value,newId=$('trNew').value,motivo=$('trMotivo').value.trim();if(!newId||!motivo)return alert('Selecione o equipamento substituto e informe o motivo.');if(equipmentHasConflict(newId,l.inicio,l.termino,locId))return alert('O equipamento substituto possui conflito de agenda no período desta locação.');const newE=find('equipamentos',newId);if(newE?.situacao!=='Disponível')return alert('O equipamento substituto não está mais disponível. Atualize a tela.');requireOnline();const itens=(l.itens||[]).map(i=>i.equipamentoId===oldId?{...i,equipamentoId:newId,serialSnapshot:newE.serial,descricaoSnapshot:equipName(newId)}:i),mid=db.collection(COLS.movimentos).doc(),batch=db.batch();batch.set(db.collection(COLS.locacoes).doc(locId),{itens,alteradoEm:nowISO(),alteradoPor:currentUser.uid},{merge:true});batch.set(db.collection(COLS.equipamentos).doc(oldId),{situacao:'Aguardando teste',localAtual:'Safety',alteradoEm:nowISO(),alteradoPor:currentUser.uid},{merge:true});batch.set(db.collection(COLS.equipamentos).doc(newId),{situacao:l.status==='Ativa'?'Alugado':'Reservado',localAtual:l.status==='Ativa'?formatAddress(l.enderecoInstalacao):'Safety',alteradoEm:nowISO(),alteradoPor:currentUser.uid},{merge:true});batch.set(mid,withEnvironment({tipo:'Substituição',locacaoId:locId,clienteId:l.clienteId,sigiloFinanceiro:false,visibilidadeTecnico:true,equipamentoAnteriorId:oldId,equipamentoNovoId:newId,equipamentoId:newId,motivo,descricao:`${equipName(oldId)} substituído por ${equipName(newId)}. Motivo: ${motivo}`,em:nowISO(),assinaturaClienteVetorial:'',ativo:true,criadoPor:currentUser.uid}));await batch.commit();await audit('substituir','Locações',locId,`Equipamento substituído em ${l.protocolo||locId}. Movimento ${mid.id}.`);fecharModal();await refresh(null,false);abrirModal('Substituição registrada',`<p>A substituição foi salva. O equipamento retirado ficou <b>Aguardando teste</b>.</p><p>${tag('Assinatura pendente','warn')}</p>`,`<button class="btn ghost" onclick="fecharModal()">Concluir sem assinatura</button><button class="btn ghost" onclick="fecharModal();perguntarAssinaturaClienteMovimento('${mid.id}')">Assinar cliente agora</button><button class="btn" onclick="fecharModal();gerarDocumentoMovimento('${mid.id}')">Gerar documento</button>`)}catch(e){console.error(e);alert('Não foi possível registrar a substituição: '+e.message)}
+}
+
+// ---------- Dashboard ----------
+function viewDashboard(){
+  const eq=active('equipamentos'),ass=active('assistencias').filter(x=>!['Entregue','Cancelada'].includes(x.status)),cfg=configDoc();
+  if(!isAdmin()){const campo=active('locacoes').filter(x=>x.status==='Ativa').length;return `<div class="kpis">${kpi('Disponíveis',eq.filter(x=>x.situacao==='Disponível').length,'Equipamentos prontos')}${kpi('Locações em campo',campo,'Operações ativas',"go('locacoes')")}${kpi('Aguardando teste',eq.filter(x=>/teste/i.test(x.situacao||'')).length,'Precisam de liberação')}${kpi('Assistências abertas',ass.length,'Em andamento',"go('assistencias')")}</div><div class="card"><input class="search" placeholder="Pesquisar equipamento, cliente ou série..." oninput="globalSearchV12(this.value)"><div id="globalResults"></div></div>`}
+  const locAtivas=active('locacoes').filter(x=>x.status==='Ativa'),mes=monthKey(),cb=active('cobrancas').filter(c=>c.competencia===mes),pagos=cb.filter(c=>c.pagoEm),inad=cb.filter(c=>!c.pagoEm&&c.vencimento<todayISO()),crit=criticalLocRows();
+  return `<div class="notice ${cfg.baseStatus==='implantacao'?'':'blue'}">${cfg.baseStatus==='implantacao'?'<b>Base em implantação.</b>':'<b>Base operacional.</b>'} Painel resumido da operação.</div><div class="quick-actions"><button class="btn" onclick="editarLocacao()">+ Nova locação</button><button class="btn" onclick="editarAssistencia()">+ Nova assistência</button><button class="btn ghost" onclick="editarEquipamento()">+ Cadastrar equipamento</button></div><div class="kpis">${kpi('Disponíveis',eq.filter(x=>x.situacao==='Disponível').length,'Prontos para locação')}${kpi('Locações ativas',locAtivas.length,'Equipamentos em campo')}${kpi('Vencidas',crit.filter(x=>x.tags.includes('Vencida')).length,'Prazo encerrado')}${kpi('Vencendo ≤ 7 dias',crit.filter(x=>x.tags.includes('Vence em até 7 dias')).length,'Atenção ao prazo')}${kpi('Inadimplentes',inad.length,'Mensalidades vencidas')}${kpi('Pagas no mês',pagos.length,brl(pagos.reduce((s,c)=>s+Number(c.valorPago||0),0)))}</div><div class="card"><h3>Localizar locações com atenção</h3><input class="search" placeholder="Pesquisar cliente, série, protocolo, vencida, inadimplente ou paga..." oninput="filterTable('dashLocTable',this.value)">${crit.length?`<table id="dashLocTable"><thead><tr><th>Locação</th><th>Cliente</th><th>Término</th><th>Situação</th><th></th></tr></thead><tbody>${crit.map(({l,tags})=>`<tr data-search="${esc([l.protocolo,clientName(l.clienteId),l.responsavel,...tags,...(l.itens||[]).map(i=>i.serialSnapshot)].join(' '))}"><td><b>${esc(l.protocolo||l.id)}</b></td><td>${esc(clientName(l.clienteId))}</td><td>${dateBR(l.termino)}</td><td>${tags.map(t=>tag(t,statusType(t))).join(' ')}</td><td><button class="btn small ghost" onclick="detalharLocacao('${l.id}')">Abrir</button></td></tr>`).join('')}</tbody></table>`:empty('Nenhuma locação crítica no momento.')}</div><div class="card"><h3>Busca geral</h3><input class="search" placeholder="Cliente, CPF/CNPJ, equipamento, série, protocolo..." oninput="globalSearchV12(this.value)"><div id="globalResults"></div></div>`
+}
+
+// ---------- Documentos / permissões ----------
+function v121TechVisibleDocument(opts){
+  const visible=new Set(['comprovante_entrega','comprovante_devolucao','entrada_assistencia','termo_emprestimo','termo_substituicao','orcamento','relatorio_manutencao','recibo']);
+  return opts.visibilidadeTecnico===true||visible.has(opts.modeloTipo)||(opts.modeloTipo==='recibo_pagamento'&&opts.sigiloFinanceiro!==true);
+}
+async function criarEGerarDocumento(opts){
+  try{requireOnline();let existing=findExistingDocument(opts.entidade,opts.entidadeId,opts.modeloTipo);if(existing){await refresh(null,false);return abrirDocumentoPreparado(existing.id)}const model=modelForType(opts.modeloTipo),protocolo=await nextProtocol('DOC'),docObj={protocolo,tipo:opts.tipo,modeloTipo:opts.modeloTipo,modeloId:model?.id||'',modeloVersao:model?.versao||'1.0',referencia:opts.referencia,entidade:opts.entidade,entidadeId:opts.entidadeId,clienteId:opts.clienteId||'',clienteNome:opts.clienteNome||'',serial:opts.serial||'',assinaturasNecessarias:opts.assinaturasNecessarias||[],assinaturaClienteVetorial:opts.assinaturaClienteVetorial||'',assinaturaTecnicoVetorial:opts.assinaturaTecnicoVetorial||'',sigiloFinanceiro:opts.sigiloFinanceiro===true,visibilidadeTecnico:v121TechVisibleDocument(opts),html:opts.html,ativo:true,arquivado:false},did=await addDoc(COLS.documentos,docObj);await audit('preparar','Documentos',did,`${protocolo} — ${opts.tipo} preparado usando modelo v${docObj.modeloVersao}.`);await refresh(null,false);abrirDocumentoPreparado(did)}catch(e){console.error(e);alert('Não foi possível preparar o documento: '+e.message)}
+}
+function rentalTableOperational(l){return `<table class="pdf-table"><thead><tr><th>Equipamento</th><th>Nº de série</th><th>Tensão</th></tr></thead><tbody>${(l.itens||[]).map(i=>{const e=find('equipamentos',i.equipamentoId)||{};return `<tr><td>${esc([e.categoriaNome||categoryName(e.categoriaId),e.modelo,e.marca].filter(Boolean).join(' · ')||i.descricaoSnapshot||'')}</td><td>${esc(i.serialSnapshot||e.serial||'')}</td><td>${esc(e.tensao||'—')}</td></tr>`}).join('')}</tbody></table>`}
+function docLocacao(l,tipo){
+  const c=find('clientes',l.clienteId),isContract=tipo==='Contrato de Locação de Equipamentos',model=getActiveModel(isContract?'contrato_locacao':'comprovante_entrega'),valor=locValorAtual(l),ctx={NUMERO_CONTRATO:l.protocolo||l.id,CLIENTE:c?.nomeRazao||'',CPF_CNPJ:c?.cpfCnpj||'',RESPONSAVEL:l.responsavel||primaryResp(c||{}).nome||'',VALOR_MENSAL:brl(valor),DATA_INICIO:dateBR(l.inicio),DATA_TERMINO:dateBR(l.termino),ENDERECO_INSTALACAO:formatAddress(l.enderecoInstalacao),LOCADORA:CFG.company.name};
+  if(!isContract)return `<div class="pdf-doc">${pdfHead()}<h1 class="pdf-title">COMPROVANTE DE ENTREGA DE EQUIPAMENTO</h1><div class="pdf-meta"><b>Locação:</b> ${esc(l.protocolo||l.id)}<br><b>Data da entrega:</b> ${dateBR((l.entregueEm||nowISO()).slice(0,10))}<br><b>Cliente:</b> ${esc(c?.nomeRazao||'')} · <b>CPF/CNPJ:</b> ${esc(c?.cpfCnpj||'—')}<br><b>Responsável:</b> ${esc(l.responsavel||primaryResp(c||{}).nome||'—')}<br><b>Endereço da entrega/instalação:</b> ${esc(formatAddress(l.enderecoInstalacao))}</div><div class="pdf-section"><h3>Equipamentos entregues</h3>${rentalTableOperational(l)}</div><div class="pdf-section contract-body"><h3>Condições de entrega</h3>${renderBodyText(model?.corpo||'',ctx)}</div>${pdfFooter(`v${model?.versao||'1.0'}`)}</div>`;
+  return `<div class="pdf-doc">${pdfHead()}<h1 class="pdf-title">CONTRATO DE LOCAÇÃO DE EQUIPAMENTOS</h1><div class="pdf-meta"><b>Nº:</b> ${esc(l.protocolo||l.id)}<br><b>LOCADORA:</b> ${esc(CFG.company.name)} · CNPJ ${esc(CFG.company.cnpj)}<br><b>LOCATÁRIA:</b> ${esc(c?.nomeRazao||'')} · <b>CPF/CNPJ:</b> ${esc(c?.cpfCnpj||'')}<br><b>Responsável:</b> ${esc(l.responsavel||primaryResp(c||{}).nome||'—')}<br><b>Endereço de instalação:</b> ${esc(formatAddress(l.enderecoInstalacao))}<br><b>Período:</b> ${dateBR(l.inicio)} a ${dateBR(l.termino)}<br><b>Primeiro vencimento:</b> ${dateBR(l.primeiroVencimento||l.inicio)}<br><b>Valor mensal:</b> ${brl(valor)}</div><div class="pdf-section"><h3>Equipamentos</h3>${rentalTable(l)}</div><div class="pdf-section contract-body"><h3>Cláusulas contratuais</h3>${renderBodyText(model?.corpo||'',ctx)}</div>${pdfFooter(`v${model?.versao||'1.0'}`)}</div>`
+}
+function gerarDocumentoLocacao(id){const l=find('locacoes',id);if(!l)return;if(!isAdmin())return gerarComprovanteEntregaLocacao(id);if(l.tipoDocumento==='30dias'||daysBetween(l.inicio,l.termino)<=30)return gerarComprovanteEntregaLocacao(id);abrirModal('Documento da locação',`<p><b>${esc(l.protocolo||id)} · ${esc(clientName(l.clienteId))}</b></p><div class="doc-choice-grid"><button class="btn" onclick="fecharModal();gerarContratoLocacao('${id}')">Contrato de Locação</button><button class="btn ghost" onclick="fecharModal();gerarComprovanteEntregaLocacao('${id}')">Comprovante de Entrega</button></div>`,`<button class="btn ghost" onclick="fecharModal()">Fechar</button>`)}
+function gerarContratoLocacao(id){if(!isAdmin())return alert('Contrato e condições comerciais são restritos ao Administrativo.');const l=find('locacoes',id);criarEGerarDocumento({tipo:'Contrato de Locação de Equipamentos',modeloTipo:'contrato_locacao',referencia:`Locação ${l.protocolo||id}`,entidade:'locacao',entidadeId:id,clienteId:l.clienteId,clienteNome:clientName(l.clienteId),serial:(l.itens||[]).map(i=>i.serialSnapshot).join(', '),html:docLocacao(l,'Contrato de Locação de Equipamentos'),assinaturasNecessarias:['tecnico','cliente'],sigiloFinanceiro:true,visibilidadeTecnico:false})}
+function gerarComprovanteEntregaLocacao(id){const l=find('locacoes',id);criarEGerarDocumento({tipo:'Comprovante de Entrega de Equipamento',modeloTipo:'comprovante_entrega',referencia:`Locação ${l.protocolo||id}`,entidade:'locacao',entidadeId:id,clienteId:l.clienteId,clienteNome:clientName(l.clienteId),serial:(l.itens||[]).map(i=>i.serialSnapshot).join(', '),html:docLocacao(l,'Comprovante de Entrega de Equipamento'),assinaturasNecessarias:['tecnico','cliente'],sigiloFinanceiro:true,visibilidadeTecnico:true})}
+function gerarComprovanteDevolucao(id){const l=find('locacoes',id),m=getActiveModel('comprovante_devolucao');if(!l)return;criarEGerarDocumento({tipo:'Comprovante de Devolução / Encerramento',modeloTipo:'comprovante_devolucao',referencia:`Locação ${l.protocolo||id}`,entidade:'locacao',entidadeId:id,clienteId:l.clienteId,clienteNome:clientName(l.clienteId),serial:(l.itens||[]).map(i=>i.serialSnapshot).join(', '),html:`<div class="pdf-doc">${pdfHead()}<h1 class="pdf-title">COMPROVANTE DE DEVOLUÇÃO / ENCERRAMENTO</h1><div class="pdf-meta"><b>Locação:</b> ${esc(l.protocolo||id)}<br><b>Cliente:</b> ${esc(clientName(l.clienteId))}<br><b>Data da devolução:</b> ${dateBR(l.terminoReal||todayISO())}</div><div class="pdf-section">${rentalTableOperational(l)}</div><div class="pdf-section contract-body">${renderBodyText(m?.corpo||'')}</div>${pdfFooter(`v${m?.versao||'1.0'}`)}</div>`,assinaturasNecessarias:['tecnico','cliente'],sigiloFinanceiro:true,visibilidadeTecnico:true})}
+function gerarDocumentoMovimento(id){const m=find('movimentos',id);if(!m)return;const sub=m.tipo==='Substituição',modelType=sub?'termo_substituicao':'termo_emprestimo';criarEGerarDocumento({tipo:sub?'Termo de Substituição de Equipamento':'Termo de Empréstimo',modeloTipo:modelType,referencia:`Movimento ${id}`,entidade:'movimento',entidadeId:id,clienteId:m.clienteId,clienteNome:clientName(m.clienteId),serial:[find('equipamentos',m.equipamentoAnteriorId)?.serial,find('equipamentos',m.equipamentoNovoId||m.equipamentoId)?.serial].filter(Boolean).join(', '),html:docMovimento(m),assinaturasNecessarias:['tecnico','cliente'],assinaturaClienteVetorial:m.assinaturaClienteVetorial||'',sigiloFinanceiro:false,visibilidadeTecnico:true})}
+function docEntregaAssistencia(a){const m=getActiveModel('comprovante_devolucao');return `<div class="pdf-doc">${pdfHead()}<h1 class="pdf-title">COMPROVANTE DE ENTREGA DO EQUIPAMENTO</h1><div class="pdf-meta"><b>Atendimento:</b> ${esc(a.protocolo||a.id)}<br><b>Cliente:</b> ${esc(clientName(a.clienteId))}<br><b>Data da entrega:</b> ${dateBR(todayISO())}<br><b>Equipamento:</b> ${esc([a.equipamentoTipo,a.marca,a.modelo].filter(Boolean).join(' · '))}<br><b>Nº de série:</b> ${esc(a.serial||'—')}</div><div class="pdf-section"><h3>Serviço / condição de saída</h3><p><b>Diagnóstico:</b> ${esc(a.diagnostico||'—')}</p><p><b>Serviços:</b> ${esc(a.servicos||'—')}</p></div><div class="pdf-section contract-body">${renderBodyText(m?.corpo||'O equipamento acima identificado foi entregue ao cliente/responsável após conclusão do atendimento registrado.')}</div>${pdfFooter(`v${m?.versao||'1.0'}`)}</div>`}
+function gerarComprovanteEntregaAssistencia(id){const a=find('assistencias',id);if(!a)return;criarEGerarDocumento({tipo:'Comprovante de Entrega do Equipamento',modeloTipo:'comprovante_devolucao',referencia:`Assistência ${a.protocolo||id}`,entidade:'assistencia',entidadeId:id,clienteId:a.clienteId,clienteNome:clientName(a.clienteId),serial:a.serial||'',html:docEntregaAssistencia(a),assinaturasNecessarias:['tecnico','cliente'],sigiloFinanceiro:false,visibilidadeTecnico:true})}
+function gerarDocumentoAssistencia(id){const a=find('assistencias',id);abrirModal('Documentos da assistência',`<p>Atendimento <b>${esc(a.protocolo||id)}</b></p><div class="doc-choice-grid"><button class="btn ghost" onclick="fecharModal();gerarComprovanteEntrada('${id}')">Comprovante de entrada</button><button class="btn ghost" onclick="fecharModal();gerarDocAssistTipo('${id}','orcamento')">Orçamento</button><button class="btn ghost" onclick="fecharModal();gerarDocAssistTipo('${id}','relatorio_manutencao')">Relatório técnico</button><button class="btn ghost" onclick="fecharModal();gerarDocAssistTipo('${id}','recibo')">Recibo de serviço / reparo</button>${a.pagamentoEm?`<button class="btn ghost" onclick="fecharModal();gerarReciboPagamento('${id}','assistencia')">Recibo de pagamento</button>`:''}${a.status==='Entregue'?`<button class="btn ghost" onclick="fecharModal();gerarComprovanteEntregaAssistencia('${id}')">Comprovante de entrega</button>`:''}</div>`)}
+async function salvarTesteAssistencia(aid){const a=find('assistencias',aid),cat=find('categorias',a.categoriaId),items=(cat?.itensTeste||[]).map((x,i)=>({item:x,valor:$(`ati${i}`)?.value||''})),resultado=$('atResultado').value,obj={assistenciaId:aid,clienteId:a.clienteId,categoriaId:a.categoriaId,serial:a.serial,data:todayISO(),tipo:'Teste técnico',itens:items,observacoes:$('atObs').value.trim(),resultado,tecnicoUid:currentUser.uid,tecnicoNome:currentUser.nome};await addDoc(COLS.testes,obj);await setDoc(COLS.assistencias,aid,{status:resultado==='Aprovado'?'Liberado':'Manutenção'});await audit('teste','Assistência',aid,`Teste técnico: ${resultado}.`);fecharModal();await refresh(null,false);if(confirm('Teste salvo. Deseja gerar o Relatório Técnico agora?'))gerarDocAssistTipo(aid,'relatorio_manutencao');else toast('Teste registrado.')}
+
+// Oculta do cadastro corrente o modelo legado separado de alteração de responsável.
+const _v121ViewModels=viewModelosDocumentos;
+viewModelosDocumentos=function(){const bak=data.modelosDocumentos;data.modelosDocumentos=(bak||[]).filter(m=>m.tipo!=='aditivo_responsavel');try{return _v121ViewModels()}finally{data.modelosDocumentos=bak}}
+
+// ---------- PDF A4 global ----------
+async function exportPdf(html,name){
+  const area=$('printArea');area.innerHTML=html;area.style.cssText='display:block;position:fixed;left:-10000px;top:0;width:794px;background:#fff;z-index:-9999;overflow:visible;margin:0;padding:0;';const el=area.firstElementChild;if(el){el.style.width='794px';el.style.maxWidth='794px';el.style.margin='0';el.style.padding='36px';el.style.boxSizing='border-box';el.style.overflow='visible'}
+  try{await waitImages(el);if(document.fonts?.ready)await document.fonts.ready;if(window.html2pdf){const opt={margin:0,filename:name,pagebreak:{mode:['css','legacy'],avoid:['tr','.pdf-signatures','.pdf-meta','.pdf-head','.pdf-footer']},image:{type:'jpeg',quality:.98},html2canvas:{scale:2,useCORS:true,backgroundColor:'#ffffff',scrollX:0,scrollY:0,windowWidth:794,width:794},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}};const blob=await html2pdf().set(opt).from(el).outputPdf('blob');const file=new File([blob],name,{type:'application/pdf'});if(navigator.canShare?.({files:[file]})&&confirm('PDF gerado. Deseja compartilhar agora?'))await navigator.share({files:[file],title:name,text:'Documento Safety Equipamentos'});else downloadBlob(blob,name);return true}window.print();return true}catch(e){console.error(e);alert('Não foi possível gerar o PDF automaticamente. Será aberta a impressão do navegador.');window.print();return false}finally{area.innerHTML='';area.removeAttribute('style')}
+}
+
+// ---------- Responsividade global de tabelas ----------
+function v121ResponsiveTables(root=document){
+  root.querySelectorAll('table:not(.pdf-table)').forEach(table=>{
+    if(table.closest('.pdf-doc')||table.closest('.model-preview'))return;
+    let labels=[...table.querySelectorAll('thead th')].map(th=>th.textContent.trim());
+    if(!labels.length){const first=table.querySelector('tbody tr');labels=first?[...first.children].map((_,i)=>i===0?'Item':'Informação'):[]}
+    table.classList.add('responsive-stack');table.querySelectorAll('tbody tr').forEach(tr=>[...tr.children].forEach((td,i)=>td.setAttribute('data-label',labels[i]||'Informação')));
+  });
+}
+const _v121Render=render;
+render=function(){_v121Render();requestAnimationFrame(()=>v121ResponsiveTables($('main')))};
+const _v121AbrirModal=abrirModal;
+abrirModal=function(title,body,foot=''){_v121AbrirModal(title,body,foot);requestAnimationFrame(()=>v121ResponsiveTables($('modalBody')))};
 
