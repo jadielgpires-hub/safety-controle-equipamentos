@@ -1303,7 +1303,7 @@ function gerarComprovanteDevolucao(id){const l=find('locacoes',id),m=getActiveMo
 function gerarDocumentoMovimento(id){const m=find('movimentos',id);if(!m)return;const sub=m.tipo==='Substituição',modelType=sub?'termo_substituicao':'termo_emprestimo';criarEGerarDocumento({tipo:sub?'Termo de Substituição de Equipamento':'Termo de Empréstimo',modeloTipo:modelType,referencia:`Movimento ${id}`,entidade:'movimento',entidadeId:id,clienteId:m.clienteId,clienteNome:clientName(m.clienteId),serial:[find('equipamentos',m.equipamentoAnteriorId)?.serial,find('equipamentos',m.equipamentoNovoId||m.equipamentoId)?.serial].filter(Boolean).join(', '),html:docMovimento(m),assinaturasNecessarias:['tecnico','cliente'],assinaturaClienteVetorial:m.assinaturaClienteVetorial||'',sigiloFinanceiro:false,visibilidadeTecnico:true})}
 function docEntregaAssistencia(a){const m=getActiveModel('comprovante_devolucao');return `<div class="pdf-doc">${pdfHead()}<h1 class="pdf-title">COMPROVANTE DE ENTREGA DO EQUIPAMENTO</h1><div class="pdf-meta"><b>Atendimento:</b> ${esc(a.protocolo||a.id)}<br><b>Cliente:</b> ${esc(clientName(a.clienteId))}<br><b>Data da entrega:</b> ${dateBR(todayISO())}<br><b>Equipamento:</b> ${esc([a.equipamentoTipo,a.marca,a.modelo].filter(Boolean).join(' · '))}<br><b>Nº de série:</b> ${esc(a.serial||'—')}</div><div class="pdf-section"><h3>Serviço / condição de saída</h3><p><b>Diagnóstico:</b> ${esc(a.diagnostico||'—')}</p><p><b>Serviços:</b> ${esc(a.servicos||'—')}</p></div><div class="pdf-section contract-body">${renderBodyText(m?.corpo||'O equipamento acima identificado foi entregue ao cliente/responsável após conclusão do atendimento registrado.')}</div>${pdfFooter(`v${m?.versao||'1.0'}`)}</div>`}
 function gerarComprovanteEntregaAssistencia(id){const a=find('assistencias',id);if(!a)return;criarEGerarDocumento({tipo:'Comprovante de Entrega do Equipamento',modeloTipo:'comprovante_devolucao',referencia:`Assistência ${a.protocolo||id}`,entidade:'assistencia',entidadeId:id,clienteId:a.clienteId,clienteNome:clientName(a.clienteId),serial:a.serial||'',html:docEntregaAssistencia(a),assinaturasNecessarias:['tecnico','cliente'],sigiloFinanceiro:false,visibilidadeTecnico:true})}
-function gerarDocumentoAssistencia(id){const a=find('assistencias',id);abrirModal('Documentos da assistência',`<p>Atendimento <b>${esc(a.protocolo||id)}</b></p><div class="doc-choice-grid"><button class="btn ghost" onclick="fecharModal();gerarComprovanteEntrada('${id}')">Comprovante de entrada</button><button class="btn ghost" onclick="fecharModal();gerarDocAssistTipo('${id}','orcamento')">Orçamento</button><button class="btn ghost" onclick="fecharModal();gerarDocAssistTipo('${id}','relatorio_manutencao')">Relatório técnico</button><button class="btn ghost" onclick="fecharModal();gerarDocAssistTipo('${id}','recibo')">Recibo de serviço / reparo</button>${a.pagamentoEm?`<button class="btn ghost" onclick="fecharModal();gerarReciboPagamento('${id}','assistencia')">Recibo de pagamento</button>`:''}<button class="btn ghost" onclick="fecharModal();gerarComprovanteEntregaAssistencia('${id}')">Comprovante de entrega</button></div>`)}
+function gerarDocumentoAssistencia(id){const a=find('assistencias',id);abrirModal('Documentos da assistência',`<p>Atendimento <b>${esc(a.protocolo||id)}</b></p><div class="doc-choice-grid"><button class="btn ghost" onclick="fecharModal();gerarComprovanteEntrada('${id}')">Comprovante de entrada</button><button class="btn ghost" onclick="fecharModal();gerarDocAssistTipo('${id}','orcamento')">Orçamento</button><button class="btn ghost" onclick="fecharModal();gerarDocAssistTipo('${id}','relatorio_manutencao')">Relatório técnico</button><button class="btn ghost" onclick="fecharModal();gerarDocAssistTipo('${id}','recibo')">Recibo de serviço / reparo</button>${a.pagamentoEm?`<button class="btn ghost" onclick="fecharModal();gerarReciboPagamento('${id}','assistencia')">Recibo de pagamento</button>`:''}${a.status==='Entregue'?`<button class="btn ghost" onclick="fecharModal();gerarComprovanteEntregaAssistencia('${id}')">Comprovante de entrega</button>`:''}</div>`)}
 async function salvarTesteAssistencia(aid){const a=find('assistencias',aid),cat=find('categorias',a.categoriaId),items=(cat?.itensTeste||[]).map((x,i)=>({item:x,valor:$(`ati${i}`)?.value||''})),resultado=$('atResultado').value,obj={assistenciaId:aid,clienteId:a.clienteId,categoriaId:a.categoriaId,serial:a.serial,data:todayISO(),tipo:'Teste técnico',itens:items,observacoes:$('atObs').value.trim(),resultado,tecnicoUid:currentUser.uid,tecnicoNome:currentUser.nome};await addDoc(COLS.testes,obj);await setDoc(COLS.assistencias,aid,{status:resultado==='Aprovado'?'Liberado':'Manutenção'});await audit('teste','Assistência',aid,`Teste técnico: ${resultado}.`);fecharModal();await refresh(null,false);if(confirm('Teste salvo. Deseja gerar o Relatório Técnico agora?'))gerarDocAssistTipo(aid,'relatorio_manutencao');else toast('Teste registrado.')}
 
 // Oculta do cadastro corrente o modelo legado separado de alteração de responsável.
@@ -1312,7 +1312,7 @@ viewModelosDocumentos=function(){const bak=data.modelosDocumentos;data.modelosDo
 
 // ---------- PDF A4 global ----------
 async function exportPdf(html,name){
-  const area=$('printArea');area.innerHTML=html;area.style.cssText='display:block;position:fixed;left:0;top:0;width:794px;background:#fff;z-index:-9999;overflow:visible;margin:0;padding:0;';const el=area.firstElementChild;if(el){el.style.width='794px';el.style.maxWidth='794px';el.style.margin='0';el.style.padding='36px';el.style.boxSizing='border-box';el.style.overflow='visible'}
+  const area=$('printArea');area.innerHTML=html;area.style.cssText='display:block;position:fixed;left:-10000px;top:0;width:794px;background:#fff;z-index:-9999;overflow:visible;margin:0;padding:0;';const el=area.firstElementChild;if(el){el.style.width='794px';el.style.maxWidth='794px';el.style.margin='0';el.style.padding='36px';el.style.boxSizing='border-box';el.style.overflow='visible'}
   try{await waitImages(el);if(document.fonts?.ready)await document.fonts.ready;if(window.html2pdf){const opt={margin:0,filename:name,pagebreak:{mode:['css','legacy'],avoid:['tr','.pdf-signatures','.pdf-meta','.pdf-head','.pdf-footer']},image:{type:'jpeg',quality:.98},html2canvas:{scale:2,useCORS:true,backgroundColor:'#ffffff',scrollX:0,scrollY:0,windowWidth:794,width:794},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}};const blob=await html2pdf().set(opt).from(el).outputPdf('blob');const file=new File([blob],name,{type:'application/pdf'});if(navigator.canShare?.({files:[file]})&&confirm('PDF gerado. Deseja compartilhar agora?'))await navigator.share({files:[file],title:name,text:'Documento Safety Equipamentos'});else downloadBlob(blob,name);return true}window.print();return true}catch(e){console.error(e);alert('Não foi possível gerar o PDF automaticamente. Será aberta a impressão do navegador.');window.print();return false}finally{area.innerHTML='';area.removeAttribute('style')}
 }
 
@@ -1330,3 +1330,126 @@ render=function(){_v121Render();requestAnimationFrame(()=>v121ResponsiveTables($
 const _v121AbrirModal=abrirModal;
 abrirModal=function(title,body,foot=''){_v121AbrirModal(title,body,foot);requestAnimationFrame(()=>v121ResponsiveTables($('modalBody')))};
 
+
+// ============================================================
+// V1.2.1-R2 — correção conservadora de PDF + assinatura legado
+// Base: V1.2.1 original (não depende do hotfix anterior)
+// ============================================================
+
+function v121r2InferSignatures(d){
+  const req=Array.isArray(d?.assinaturasNecessarias)?d.assinaturasNecessarias.filter(Boolean):[];
+  if(req.length)return req;
+  const tipo=String(d?.modeloTipo||'').toLowerCase();
+  if(['contrato_locacao','comprovante_entrega','comprovante_devolucao','entrada_assistencia','termo_emprestimo','termo_substituicao','aditivo_locacao','aditivo_responsavel'].includes(tipo))return ['tecnico','cliente'];
+  if(['orcamento','relatorio_manutencao','recibo','recibo_pagamento'].includes(tipo))return ['tecnico'];
+  const nome=normalize(String(d?.tipo||''));
+  if(/contrato|entrega|devolucao|substituicao|emprestimo|aditivo|entrada/.test(nome))return ['tecnico','cliente'];
+  if(/orcamento|relatorio|recibo/.test(nome))return ['tecnico'];
+  return [];
+}
+
+const _v121r2AssinaturaCompleta=assinaturaCompleta;
+assinaturaCompleta=function(d){
+  if(d?.assinadoForaApp)return true;
+  const req=v121r2InferSignatures(d);
+  return req.every(x=>x==='tecnico'?!!d.assinaturaTecnicoVetorial:x==='cliente'?!!d.assinaturaClienteVetorial:true);
+};
+
+documentStatus=function(d){
+  if(d?.assinadoForaApp)return 'Assinado fora do App';
+  const req=v121r2InferSignatures(d);
+  if(req.length&&!assinaturaCompleta(d))return 'Pendente assinatura';
+  if(d?.pdfGeradoEm)return 'Emitido';
+  return req.length?'Assinado':'Preparado';
+};
+
+const _v121r2ViewDocumentos=viewDocumentos;
+viewDocumentos=function(){
+  const touched=[];
+  (data.documentos||[]).forEach(d=>{
+    if(!Array.isArray(d.assinaturasNecessarias)||!d.assinaturasNecessarias.length){
+      const req=v121r2InferSignatures(d);
+      if(req.length){touched.push([d,d.assinaturasNecessarias]);d.assinaturasNecessarias=req;}
+    }
+  });
+  try{return _v121r2ViewDocumentos();}
+  finally{touched.forEach(([d,old])=>{if(old===undefined)delete d.assinaturasNecessarias;else d.assinaturasNecessarias=old;});}
+};
+
+abrirDocumentoPreparado=function(did){
+  const d=find('documentos',did);if(!d)return;
+  const req=v121r2InferSignatures(d);
+  abrirModal('Documento preparado',`<p><b>${esc(d.protocolo||d.id)} · ${esc(d.tipo)}</b></p><p class="hint">Escolha como este documento será tratado.</p><div class="doc-flow-options"><button class="option-card" onclick="fecharModal();assinarDocumentoAgora('${did}')"><b>Assinar agora</b><span>Coletar as assinaturas exigidas pelo documento.</span></button><button class="option-card" onclick="fecharModal();marcarAssinadoForaApp('${did}')"><b>Assinado fora do App</b><span>Registrar assinatura física ou por outro meio e enviar ao Histórico.</span></button><button class="option-card" onclick="fecharModal();reabrirDocumento('${did}')"><b>Gerar sem assinatura</b><span>Abrir a impressão A4 e manter pendente se houver assinaturas obrigatórias.</span></button></div>${!req.length?'<p class="hint">Este documento não exige assinatura obrigatória.</p>':''}`,`<button class="btn ghost" onclick="fecharModal()">Fechar</button>`);
+};
+
+assinarDocumentoAgora=function(id){
+  const d=find('documentos',id);if(!d)return;
+  const req=v121r2InferSignatures(d);
+  const needTech=req.includes('tecnico')&&!d.assinaturaTecnicoVetorial;
+  const needCli=req.includes('cliente')&&!d.assinaturaClienteVetorial;
+  if(needTech)return openSignature({collection:COLS.documentos,id,field:'assinaturaTecnicoVetorial',title:'Assinatura Safety',hint:'Assine como representante da Safety.',nextSignature:needCli?'cliente':''});
+  if(needCli)return assinarDocumento(id,'cliente');
+  return reabrirDocumento(id);
+};
+
+// Disponibiliza o comprovante de entrega da assistência também para registros
+// legados cujo status foi alterado posteriormente por teste/manutenção.
+gerarDocumentoAssistencia=function(id){
+  const a=find('assistencias',id);if(!a)return;
+  abrirModal('Documentos da assistência',`<p>Atendimento <b>${esc(a.protocolo||id)}</b></p><div class="doc-choice-grid"><button class="btn ghost" onclick="fecharModal();gerarComprovanteEntrada('${id}')">Comprovante de entrada</button><button class="btn ghost" onclick="fecharModal();gerarDocAssistTipo('${id}','orcamento')">Orçamento</button><button class="btn ghost" onclick="fecharModal();gerarDocAssistTipo('${id}','relatorio_manutencao')">Relatório técnico</button><button class="btn ghost" onclick="fecharModal();gerarDocAssistTipo('${id}','recibo')">Recibo de serviço / reparo</button>${a.pagamentoEm?`<button class="btn ghost" onclick="fecharModal();gerarReciboPagamento('${id}','assistencia')">Recibo de pagamento</button>`:''}<button class="btn ghost" onclick="fecharModal();gerarComprovanteEntregaAssistencia('${id}')">Comprovante de entrega</button></div>`,`<button class="btn ghost" onclick="fecharModal()">Fechar</button>`);
+};
+
+function v121r2PrintCss(){return `
+@page{size:A4 portrait;margin:11mm 12mm 12mm}
+*{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+html,body{margin:0!important;padding:0!important;background:#fff!important;color:#18212b;font-family:Arial,Helvetica,sans-serif}
+.pdf-doc{width:100%!important;max-width:none!important;margin:0!important;padding:0!important;overflow:visible!important;background:#fff!important;font-size:10.5px;line-height:1.45}
+.pdf-head{display:flex;align-items:center;justify-content:space-between;gap:14px;border-bottom:5px solid #073B73;padding:0 0 10px;margin:0 0 14px;break-inside:avoid;page-break-inside:avoid}
+.pdf-head img{width:44mm!important;max-width:44mm!important;max-height:24mm!important;object-fit:contain;flex:0 0 auto}
+.pdf-head .company{text-align:right;font-size:9px;line-height:1.45;color:#4f5e6c;max-width:118mm;overflow-wrap:anywhere}
+.pdf-title{font-size:19px!important;line-height:1.2;color:#073B73;text-align:center;margin:17px 0 14px;overflow-wrap:anywhere}
+.pdf-meta{background:#f5f7fa;border:1px solid #e1e7ed;padding:9px 10px;margin:10px 0;font-size:9.5px;line-height:1.5;overflow-wrap:anywhere;break-inside:avoid;page-break-inside:avoid}
+.pdf-section{margin:13px 0;max-width:100%}.pdf-section h3{font-size:12px;color:#073B73;border-bottom:1px solid #dfe5ec;padding-bottom:4px;margin:0 0 8px}
+.contract-body{font-size:9.5px;line-height:1.48;text-align:justify}.contract-body p{margin:0 0 8px;orphans:3;widows:3}
+.pdf-table{width:100%!important;max-width:100%!important;border-collapse:collapse;table-layout:fixed;margin:7px 0 10px}
+.pdf-table th,.pdf-table td{border:1px solid #dfe5ec;padding:6px;font-size:9px;background:#fff;overflow-wrap:anywhere;word-break:normal;vertical-align:top}
+.pdf-table th{background:#eef3f8;color:#073B73;text-align:left}tr{break-inside:avoid;page-break-inside:avoid}
+.pdf-signatures{display:grid;grid-template-columns:1fr 1fr;gap:16mm;margin-top:22mm;break-inside:avoid;page-break-inside:avoid}
+.pdf-sign{text-align:center;font-size:9px}.pdf-sign svg,.pdf-sign img{max-width:48mm!important;max-height:18mm!important;width:auto;height:auto;display:block;margin:0 auto}.pdf-sign-space{height:18mm}.pdf-line{border-top:1px solid #333;margin-top:4px;padding-top:4px;min-height:10mm}
+.pdf-value{font-size:17px}.pdf-footer{margin-top:15px;border-top:3px solid #D4A017;padding-top:6px;text-align:center;font-size:7.5px;color:#6b7280;break-inside:avoid;page-break-inside:avoid}
+`}
+
+// PDF: usa o mecanismo nativo de impressão do navegador em um documento
+// isolado. Isto elimina o deslocamento/corte produzido pelo html2pdf no app.
+async function exportPdf(html,name){
+  let frame;
+  try{
+    frame=document.createElement('iframe');
+    frame.setAttribute('aria-hidden','true');
+    frame.style.cssText='position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none;z-index:-1;';
+    document.body.appendChild(frame);
+    const doc=frame.contentDocument||frame.contentWindow.document;
+    const title=String(name||'Documento Safety').replace(/\.pdf$/i,'');
+    const base=new URL('.',window.location.href).href;
+    doc.open();
+    doc.write(`<!doctype html><html><head><meta charset="utf-8"><base href="${base.replace(/"/g,'&quot;')}"><title>${esc(title)}</title><style>${v121r2PrintCss()}</style></head><body>${html}</body></html>`);
+    doc.close();
+    const imgs=[...doc.images];
+    await Promise.all(imgs.map(img=>img.complete?Promise.resolve():new Promise(r=>{img.onload=img.onerror=r})));
+    if(doc.fonts?.ready)await doc.fonts.ready;
+    await new Promise(r=>setTimeout(r,120));
+    const w=frame.contentWindow;
+    let cleaned=false;
+    const cleanup=()=>{if(cleaned)return;cleaned=true;setTimeout(()=>{try{frame.remove()}catch{}},250)};
+    w.addEventListener('afterprint',cleanup,{once:true});
+    w.focus();
+    w.print();
+    setTimeout(cleanup,60000);
+    return true;
+  }catch(e){
+    console.error('Falha ao abrir impressão A4:',e);
+    try{frame?.remove()}catch{}
+    alert('Não foi possível abrir a geração do PDF. Atualize a página e tente novamente.');
+    return false;
+  }
+}
