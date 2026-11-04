@@ -1069,7 +1069,7 @@ async function exportPdf(html,name){const area=$('printArea');area.innerHTML=htm
 // ---- Ajustes finais V1.2 ----
 function clienteOperacional(id){const c=find('clientes',id);return !!c&&!isArchived(c)}
 const _viewLocacoesV12=viewLocacoes;
-viewLocacoes=function(){if(!isAdmin())return empty('Acesso restrito.');const all=data.locacoes||[],bak=data.locacoes;data.locacoes=all.filter(l=>clienteOperacional(l.clienteId));try{return _viewLocacoesV12()}finally{data.locacoes=bak}}
+viewLocacoes=function(){const all=data.locacoes||[],bak=data.locacoes;data.locacoes=all.filter(l=>clienteOperacional(l.clienteId));try{return _viewLocacoesV12()}finally{data.locacoes=bak}}
 const _viewAssistenciasV12=viewAssistencias;
 viewAssistencias=function(){const all=data.assistencias||[],bak=data.assistencias;data.assistencias=all.filter(a=>clienteOperacional(a.clienteId));try{return _viewAssistenciasV12()}finally{data.assistencias=bak}}
 
