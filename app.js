@@ -1678,3 +1678,84 @@ criarEGerarDocumento=async function(opts){
 };
 
 console.info('Safety V1.2.2: carregamento sob demanda e cache de sessão ativos.');
+
+// ============================================================
+// V1.2.2.1 — Relatório Técnico sempre representa o estado atual
+// Não reutiliza relatório anterior da mesma assistência.
+// Isso evita herdar HTML, testes e assinaturas de uma emissão antiga.
+// ============================================================
+criarEGerarDocumento=async function(opts){
+  try{
+    requireOnline();
+    const sempreNovo = opts?.sempreNovo === true || opts?.modeloTipo === 'relatorio_manutencao';
+    let existing=null;
+    if(!sempreNovo){
+      existing=(data.documentos||[]).find(d=>!isArchived(d)&&d.entidade===opts.entidade&&d.entidadeId===opts.entidadeId&&d.modeloTipo===opts.modeloTipo);
+      if(!existing){
+        try{
+          const snap=await db.collection(COLS.documentos).where('entidadeId','==',opts.entidadeId).limit(25).get();
+          const rows=snap.docs.map(d=>({id:d.id,...d.data()}));
+          existing=rows.find(d=>!isArchived(d)&&d.entidade===opts.entidade&&d.modeloTipo===opts.modeloTipo);
+          rows.forEach(d=>v122UpsertLocal('documentos',d.id,d,true));
+        }catch(e){console.warn('V1.2.2.1 consulta pontual de documento',e)}
+      }
+    }
+    if(existing)return abrirDocumentoPreparado(existing.id);
+    const model=modelForType(opts.modeloTipo),protocolo=await nextProtocol('DOC');
+    const docObj={
+      protocolo,
+      tipo:opts.tipo,
+      modeloTipo:opts.modeloTipo,
+      modeloId:model?.id||'',
+      modeloVersao:model?.versao||'1.0',
+      referencia:opts.referencia,
+      entidade:opts.entidade,
+      entidadeId:opts.entidadeId,
+      clienteId:opts.clienteId||'',
+      clienteNome:opts.clienteNome||'',
+      serial:opts.serial||'',
+      assinaturasNecessarias:opts.assinaturasNecessarias||[],
+      assinaturaClienteVetorial:'',
+      assinaturaTecnicoVetorial:'',
+      assinadoForaApp:false,
+      sigiloFinanceiro:opts.sigiloFinanceiro===true,
+      visibilidadeTecnico:opts.visibilidadeTecnico!==false,
+      html:opts.html,
+      ativo:true,
+      arquivado:false
+    };
+    const did=await addDoc(COLS.documentos,docObj);
+    await audit('preparar','Documentos',did,`${protocolo} — ${opts.tipo} preparado usando modelo v${docObj.modeloVersao}.`);
+    abrirDocumentoPreparado(did);
+  }catch(e){
+    console.error(e);
+    alert('Não foi possível preparar o documento: '+e.message);
+  }
+};
+
+// Garante que o Relatório Técnico use o conteúdo atual dos testes da assistência.
+gerarDocAssistTipo=function(id,tipo){
+  const a=find('assistencias',id);if(!a)return;
+  const cfg={
+    orcamento:{nome:'Orçamento',html:docOrcamento(a),req:['tecnico']},
+    relatorio_manutencao:{nome:'Relatório de Manutenção',html:docRelatorio(a),req:['tecnico'],sempreNovo:true},
+    recibo:{nome:'Recibo',html:docRecibo(a),req:['tecnico']}
+  }[tipo];
+  if(!cfg)return;
+  criarEGerarDocumento({
+    tipo:cfg.nome,
+    modeloTipo:tipo,
+    referencia:`Assistência ${a.protocolo||id}`,
+    entidade:'assistencia',
+    entidadeId:id,
+    clienteId:a.clienteId,
+    clienteNome:clientName(a.clienteId),
+    serial:a.serial,
+    html:cfg.html,
+    assinaturasNecessarias:cfg.req,
+    sigiloFinanceiro:false,
+    sempreNovo:cfg.sempreNovo===true
+  });
+};
+
+console.info('Safety V1.2.2.1: relatório técnico sempre novo, sem herdar assinatura ou conteúdo anterior.');
