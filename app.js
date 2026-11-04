@@ -2067,3 +2067,187 @@ gerarDocAssistTipo=function(id,tipo){
 };
 
 console.info('Safety V1.2.2.6: relatório técnico com histórico completo ou teste individual e área para indicador químico.');
+
+
+// ============================================================
+// V1.2.2.7 — Central Administrativa de Boletos
+// Reutiliza as mensalidades/cobranças existentes. Nenhuma coleção nova.
+// ============================================================
+(function(){
+  // Insere a aba apenas para o Administrativo, antes de Documentos.
+  if(!V12_NAV.some(x=>x[0]==='boletos')){
+    const idx=V12_NAV.findIndex(x=>x[0]==='documentos');
+    V12_NAV.splice(idx<0?V12_NAV.length:idx,0,['boletos','▧','Boletos']);
+  }
+  V12_TITLES.boletos='Boletos';
+  ADMIN_ONLY_PAGES.add('boletos');
+
+  const oldDeps=v122PageDeps;
+  v122PageDeps=function(page){
+    if(page==='boletos')return ['cobrancas','clientes','locacoes'];
+    return oldDeps(page);
+  };
+
+  // Render com a nova aba, preservando todas as telas já homologadas.
+  render=function(){
+    if(!canAccessPage(currentPage))currentPage='dashboard';
+    $('pageTitle').textContent=V12_TITLES[currentPage]||({usuarios:'Usuários',auditoria:'Auditoria',modelos:'Modelos de Documentos'}[currentPage]||'Safety');
+    const views={dashboard:viewDashboard,solicitacoes:viewSolicitacoes,clientes:viewClientes,equipamentos:viewEquipamentos,locacoes:viewLocacoes,assistencias:viewAssistencias,boletos:viewBoletosV1227,documentos:viewDocumentos,configuracoes:viewConfiguracoes,usuarios:viewUsuarios,auditoria:viewAuditoria,modelos:viewModelosDocumentos};
+    $('main').innerHTML=(views[currentPage]||viewDashboard)();
+    const role=$('userRole');if(role)role.textContent=userProfileLabel();
+  };
+})();
+
+window.__blMonth=window.__blMonth||todayISO().slice(0,7);
+window.__blScope=window.__blScope||'mes';
+window.__blFrom=window.__blFrom||todayISO().slice(0,7);
+window.__blTo=window.__blTo||todayISO().slice(0,7);
+window.__blStatus=window.__blStatus||'Todos';
+window.__blPayment=window.__blPayment||'Todos';
+
+function v1227MonthShift(ym,delta){
+  const [y,m]=String(ym||todayISO().slice(0,7)).split('-').map(Number),d=new Date(y,m-1+delta,1);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+}
+function v1227MonthBounds(ym){
+  const [y,m]=ym.split('-').map(Number),last=new Date(y,m,0).getDate();
+  return {first:`${ym}-01`,last:`${ym}-${String(last).padStart(2,'0')}`};
+}
+function v1227BoletoStatus(c){return c?.boletoStatus||'A gerar'}
+function v1227BoletoTag(c){
+  const s=v1227BoletoStatus(c),t=s==='Enviado'?'ok':s==='Gerado'?'info':s==='Não gerar'?'info':'warn';
+  return tag(s,t);
+}
+function v1227Envios(c){
+  const arr=Array.isArray(c?.boletoEnvios)?[...c.boletoEnvios]:[];
+  if(!arr.length&&c?.boletoEnviadoEm)arr.push({em:c.boletoEnviadoEm,canal:c.boletoCanal||'Não informado',observacao:c.boletoEnvioObs||'',uid:c.boletoEnviadoPor||'',nome:userName(c.boletoEnviadoPor)});
+  return arr.sort((a,b)=>(a.em||'').localeCompare(b.em||''));
+}
+function v1227Geracoes(c){
+  const arr=Array.isArray(c?.boletoGeracoes)?[...c.boletoGeracoes]:[];
+  if(!arr.length&&c?.boletoGeradoEm)arr.push({em:c.boletoGeradoEm,identificador:c.boletoIdentificador||'',observacao:c.boletoObs||'',uid:c.boletoGeradoPor||'',nome:userName(c.boletoGeradoPor)});
+  return arr.sort((a,b)=>(a.em||'').localeCompare(b.em||''));
+}
+function v1227LatestEnvio(c){const a=v1227Envios(c);return a[a.length-1]||null}
+function v1227LatestGeracao(c){const a=v1227Geracoes(c);return a[a.length-1]||null}
+function v1227AllRows(){
+  return active('cobrancas').filter(c=>c.locacaoId&&clienteOperacional(c.clienteId));
+}
+function v1227RowsScope(){
+  let rows=v1227AllRows();
+  if(window.__blScope==='mes')rows=rows.filter(c=>c.competencia===window.__blMonth);
+  else if(window.__blScope==='periodo')rows=rows.filter(c=>(!window.__blFrom||c.competencia>=window.__blFrom)&&(!window.__blTo||c.competencia<=window.__blTo));
+  if(window.__blStatus!=='Todos'){
+    if(window.__blStatus==='Pendências')rows=rows.filter(c=>['A gerar','Gerado'].includes(v1227BoletoStatus(c))||paymentStatus(c)==='Inadimplente');
+    else if(window.__blStatus==='Próximos 7 dias')rows=rows.filter(c=>!c.pagoEm&&daysBetween(todayISO(),c.vencimento)>=0&&daysBetween(todayISO(),c.vencimento)<=7);
+    else rows=rows.filter(c=>v1227BoletoStatus(c)===window.__blStatus);
+  }
+  if(window.__blPayment!=='Todos'){
+    if(window.__blPayment==='Pago')rows=rows.filter(c=>!!c.pagoEm);
+    else if(window.__blPayment==='A vencer')rows=rows.filter(c=>paymentStatus(c)==='A vencer');
+    else if(window.__blPayment==='Inadimplente')rows=rows.filter(c=>paymentStatus(c)==='Inadimplente');
+  }
+  return rows.sort((a,b)=>window.__blScope==='todos'?(b.competencia||'').localeCompare(a.competencia||'')||(a.vencimento||'').localeCompare(b.vencimento||''):(a.vencimento||'').localeCompare(b.vencimento||''));
+}
+function v1227MonthRows(ym){return v1227AllRows().filter(c=>c.competencia===ym).sort((a,b)=>(a.vencimento||'').localeCompare(b.vencimento||''))}
+function v1227LocacoesSemCompetencia(ym){
+  if(!ym)return[];
+  const {first,last}=v1227MonthBounds(ym),existing=new Set(v1227AllRows().filter(c=>c.competencia===ym).map(c=>c.locacaoId));
+  return active('locacoes').filter(l=>!['Encerrada','Cancelada'].includes(l.status)&&l.inicio<=last&&(!l.termino||l.termino>=first)&&!existing.has(l.id));
+}
+function v1227SetMonth(ym){window.__blMonth=ym||todayISO().slice(0,7);window.__blScope='mes';render()}
+function v1227ShiftMonth(delta){v1227SetMonth(v1227MonthShift(window.__blMonth,delta))}
+function v1227SetScope(scope){window.__blScope=scope;if(scope==='periodo'){window.__blFrom=window.__blFrom||window.__blMonth;window.__blTo=window.__blTo||window.__blMonth}render()}
+function v1227SetStatus(s){window.__blStatus=s;render()}
+function v1227SetPayment(s){window.__blPayment=s;render()}
+function v1227SetPeriod(){window.__blFrom=$('blFrom')?.value||'';window.__blTo=$('blTo')?.value||'';if(window.__blFrom&&window.__blTo&&window.__blFrom>window.__blTo)return alert('A competência inicial não pode ser posterior à final.');window.__blScope='periodo';render()}
+
+function v1227BoletoSummary(rows){
+  const total=rows.length,valor=rows.reduce((s,c)=>s+Number(c.valorContrato||c.valor||0),0),agerar=rows.filter(c=>v1227BoletoStatus(c)==='A gerar').length,gerados=rows.filter(c=>v1227BoletoStatus(c)==='Gerado').length,enviados=rows.filter(c=>v1227BoletoStatus(c)==='Enviado').length,pagos=rows.filter(c=>c.pagoEm).length,inad=rows.filter(c=>paymentStatus(c)==='Inadimplente').length;
+  return `<div class="metric-row"><div class="metric"><span>Previstos</span><strong>${total}</strong><small>${brl(valor)}</small></div><div class="metric"><span>A gerar</span><strong>${agerar}</strong></div><div class="metric"><span>Gerados</span><strong>${gerados}</strong></div><div class="metric"><span>Enviados</span><strong>${enviados}</strong></div><div class="metric"><span>Pagos</span><strong>${pagos}</strong></div><div class="metric"><span>Inadimplentes</span><strong>${inad}</strong></div></div>`;
+}
+function v1227DashboardSummary(){
+  if(!isAdmin())return'';
+  const ym=todayISO().slice(0,7),rows=v1227MonthRows(ym),agerar=rows.filter(c=>v1227BoletoStatus(c)==='A gerar').length,gerados=rows.filter(c=>v1227BoletoStatus(c)==='Gerado').length,enviados=rows.filter(c=>v1227BoletoStatus(c)==='Enviado').length,inad=rows.filter(c=>paymentStatus(c)==='Inadimplente').length;
+  return `<div class="card"><div class="row"><div><h2>Boletos — ${monthLabel(ym)}</h2><p class="hint">Resumo da competência. O controle detalhado fica na aba Boletos.</p></div><button class="btn" onclick="go('boletos')">Abrir controle de boletos</button></div><div class="metric-row"><div class="metric"><span>Previstos</span><strong>${rows.length}</strong></div><div class="metric"><span>A gerar</span><strong>${agerar}</strong></div><div class="metric"><span>Gerados</span><strong>${gerados}</strong></div><div class="metric"><span>Enviados</span><strong>${enviados}</strong></div><div class="metric"><span>Inadimplentes</span><strong>${inad}</strong></div></div></div>`;
+}
+// Substitui somente o bloco grande de boletos do Dashboard criado na V1.2.2.4.
+v1224BoletoDashboard=function(){return v1227DashboardSummary()};
+
+function viewBoletosV1227(){
+  if(!isAdmin())return empty('Acesso restrito.');
+  const rows=v1227RowsScope(),monthRows=v1227MonthRows(window.__blMonth),missing=window.__blScope==='mes'?v1227LocacoesSemCompetencia(window.__blMonth):[];
+  const scopeLabel=window.__blScope==='mes'?monthLabel(window.__blMonth):window.__blScope==='periodo'?`${monthLabel(window.__blFrom)} a ${monthLabel(window.__blTo)}`:'Todas as competências';
+  const periodHtml=window.__blScope==='periodo'?`<div class="inline-actions" style="margin-top:10px"><div><label>De</label><input id="blFrom" type="month" value="${esc(window.__blFrom)}"></div><div><label>Até</label><input id="blTo" type="month" value="${esc(window.__blTo)}"></div><button class="btn small" onclick="v1227SetPeriod()">Aplicar período</button></div>`:'';
+  const missingHtml=missing.length?`<div class="notice" style="margin-top:12px"><b>Atenção:</b> ${missing.length} locação(ões) ativa(s)/reservada(s) sem competência de boleto em ${esc(monthLabel(window.__blMonth))}.<div class="inline-actions" style="margin-top:8px">${missing.slice(0,8).map(l=>`<button class="btn small ghost" onclick="v1227SincronizarLocacao('${l.id}')">Sincronizar ${esc(l.protocolo||l.id)}</button>`).join('')}</div></div>`:'';
+  return `<div class="card"><div class="row"><div><h2>Boletos</h2><p class="hint">Central administrativa de geração externa, envio e acompanhamento mensal. Boleto e pagamento permanecem controles independentes.</p></div><button class="btn ghost" onclick="exportarCSV('cobrancas')">Exportar CSV</button></div>
+    <div class="toolbar"><div><label>Competência</label><div class="inline-actions"><button class="btn small ghost" onclick="v1227ShiftMonth(-1)">←</button><input type="month" value="${esc(window.__blMonth)}" onchange="v1227SetMonth(this.value)"><button class="btn small ghost" onclick="v1227ShiftMonth(1)">→</button><button class="btn small ghost" onclick="v1227SetMonth('${todayISO().slice(0,7)}')">Mês atual</button></div></div><div><label>Visão</label><div class="inline-actions"><button class="btn small ${window.__blScope==='mes'?'':'ghost'}" onclick="v1227SetScope('mes')">Mês</button><button class="btn small ${window.__blScope==='periodo'?'':'ghost'}" onclick="v1227SetScope('periodo')">Período</button><button class="btn small ${window.__blScope==='todos'?'':'ghost'}" onclick="v1227SetScope('todos')">Todos</button></div></div></div>${periodHtml}
+    <div class="section-title">Resumo · ${esc(scopeLabel)}</div>${v1227BoletoSummary(rows)}${missingHtml}
+    <div class="grid2" style="margin-top:12px"><div><label>Situação do boleto</label><select onchange="v1227SetStatus(this.value)"><option ${window.__blStatus==='Todos'?'selected':''}>Todos</option><option ${window.__blStatus==='Pendências'?'selected':''}>Pendências</option><option ${window.__blStatus==='A gerar'?'selected':''}>A gerar</option><option ${window.__blStatus==='Gerado'?'selected':''}>Gerado</option><option ${window.__blStatus==='Enviado'?'selected':''}>Enviado</option><option ${window.__blStatus==='Não gerar'?'selected':''}>Não gerar</option><option ${window.__blStatus==='Próximos 7 dias'?'selected':''}>Próximos 7 dias</option></select></div><div><label>Pagamento</label><select onchange="v1227SetPayment(this.value)"><option ${window.__blPayment==='Todos'?'selected':''}>Todos</option><option ${window.__blPayment==='A vencer'?'selected':''}>A vencer</option><option ${window.__blPayment==='Pago'?'selected':''}>Pago</option><option ${window.__blPayment==='Inadimplente'?'selected':''}>Inadimplente</option></select></div></div>
+    <div class="inline-actions" style="margin:12px 0"><button class="btn small" onclick="v1227BoletoLoteGerado()">Selecionados: marcar gerados</button><button class="btn small ghost" onclick="v1227AbrirEnvioLote()">Selecionados: registrar envio</button></div>
+    <input class="search" placeholder="Pesquisar cliente, CPF/CNPJ, locação, competência, vencimento, canal..." oninput="filterTable('boletosTable',this.value)">
+    ${rows.length?`<table id="boletosTable"><thead><tr><th></th><th>Competência</th><th>Cliente / Locação</th><th>Vencimento</th><th>Valor</th><th>Boleto</th><th>Envio</th><th>Pagamento</th><th>Ações</th></tr></thead><tbody>${rows.map(c=>v1227BoletoRow(c)).join('')}</tbody></table>`:empty('Nenhum boleto encontrado com os filtros selecionados.')}
+  </div>`;
+}
+function v1227BoletoRow(c){
+  const l=find('locacoes',c.locacaoId),cli=find('clientes',c.clienteId),env=v1227LatestEnvio(c),ger=v1227LatestGeracao(c),pay=paymentStatus(c),search=[c.competencia,clientName(c.clienteId),cli?.cpfCnpj,l?.protocolo,c.vencimento,v1227BoletoStatus(c),pay,env?.canal,ger?.identificador].join(' ');
+  return `<tr data-search="${esc(search)}"><td><input type="checkbox" class="boletoSel" value="${c.id}" aria-label="Selecionar boleto"></td><td><b>${esc(monthLabel(c.competencia))}</b></td><td><b>${esc(clientName(c.clienteId))}</b><br><span class="muted">${esc(l?.protocolo||c.locacaoProtocolo||c.locacaoId)}</span></td><td>${dateBR(c.vencimento)}</td><td><b>${brl(c.valorContrato||c.valor||0)}</b></td><td>${v1227BoletoTag(c)}${ger?.identificador?`<br><span class="muted">${esc(ger.identificador)}</span>`:''}</td><td>${env?`${tag(env.canal||'Registrado','info')}<br><span class="muted">${dateTimeBR(env.em)}</span>`:'—'}</td><td>${tag(pay,statusType(pay))}${c.pagoEm?`<br><span class="muted">${brl(c.valorPago||c.valorContrato||c.valor||0)}</span>`:''}</td><td><div class="inline-actions">${v1227BoletoStatus(c)==='A gerar'?`<button class="btn small" onclick="v1227AbrirGeracao('${c.id}')">Gerado</button>`:''}${['Gerado','Enviado'].includes(v1227BoletoStatus(c))?`<button class="btn small ghost" onclick="v1227AbrirEnvio('${c.id}')">${v1227BoletoStatus(c)==='Enviado'?'Reenviar':'Enviar'}</button>`:''}${!c.pagoEm?`<button class="btn small ghost" onclick="registrarPagamento('${c.id}')">Pagamento</button>`:''}<button class="btn small ghost" onclick="v1227DetalharBoleto('${c.id}')">Detalhes</button></div></td></tr>`;
+}
+
+function v1227Selected(){return [...document.querySelectorAll('.boletoSel:checked')].map(x=>x.value)}
+function v1227IsoFromDate(d){return d?new Date(`${d}T12:00:00`).toISOString():nowISO()}
+function v1227AbrirGeracao(cid){
+  const c=find('cobrancas',cid);if(!c||!isAdmin())return;const g=v1227LatestGeracao(c);
+  abrirModal('Registrar boleto gerado',`<p><b>${esc(clientName(c.clienteId))}</b> · ${esc(monthLabel(c.competencia))} · ${brl(c.valorContrato||c.valor||0)}</p><div class="grid2"><div><label>Data da geração *</label><input id="blGerData" type="date" value="${esc((g?.em||todayISO()).slice(0,10))}"></div><div><label>Identificador / nosso número</label><input id="blGerId" value="${esc(g?.identificador||c.boletoIdentificador||'')}" placeholder="Opcional"></div></div><label>Observação</label><textarea id="blGerObs" placeholder="Opcional">${esc(g?.observacao||'')}</textarea>`,`<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="v1227SalvarGeracao('${cid}')">Salvar geração</button>`);
+}
+async function v1227SalvarGeracao(cid){
+  if(!isAdmin())return;const c=find('cobrancas',cid),d=$('blGerData').value;if(!d)return alert('Informe a data da geração.');const em=v1227IsoFromDate(d),ident=$('blGerId').value.trim(),obs=$('blGerObs').value.trim(),hist=v1227Geracoes(c),entry={em,identificador:ident,observacao:obs,uid:currentUser.uid,nome:currentUser.nome},patch={boletoStatus:'Gerado',boletoGeradoEm:em,boletoGeradoPor:currentUser.uid,boletoIdentificador:ident,boletoObs:obs,boletoGeracoes:[...hist,entry]};
+  await setDoc(COLS.cobrancas,cid,patch);await audit('boleto_gerado','Boletos',cid,`${c.locacaoProtocolo||c.locacaoId} · ${monthLabel(c.competencia)}: boleto gerado${ident?` (${ident})`:''}.`);fecharModal();render();toast('Boleto marcado como gerado.');
+}
+function v1227AbrirEnvio(cid){
+  const c=find('cobrancas',cid);if(!c||!isAdmin())return;
+  abrirModal(v1227BoletoStatus(c)==='Enviado'?'Registrar novo envio':'Registrar envio',`<p><b>${esc(clientName(c.clienteId))}</b> · ${esc(monthLabel(c.competencia))}</p><div class="grid2"><div><label>Data do envio *</label><input id="blEnvData" type="date" value="${todayISO()}"></div><div><label>Canal predefinido (opcional)</label><select id="blEnvCanal"><option value="">— Escrever livremente —</option><option>WhatsApp</option><option>E-mail</option><option>Impresso / em mãos</option><option>Outro</option></select></div></div><label>Canal / forma de envio (texto livre)</label><input id="blEnvLivre" placeholder="Ex.: Portal do cliente, recepção, financeiro do condomínio..."><label>Observação</label><textarea id="blEnvObs" placeholder="Opcional"></textarea>`,`<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="v1227SalvarEnvio('${cid}')">Registrar envio</button>`);
+}
+async function v1227SalvarEnvio(cid){
+  if(!isAdmin())return;const c=find('cobrancas',cid),d=$('blEnvData').value,sel=$('blEnvCanal').value.trim(),livre=$('blEnvLivre').value.trim(),canal=livre||sel;if(!d)return alert('Informe a data do envio.');if(!canal)return alert('Selecione ou escreva o canal/forma de envio.');const em=v1227IsoFromDate(d),obs=$('blEnvObs').value.trim(),envios=v1227Envios(c),entry={em,canal,observacao:obs,uid:currentUser.uid,nome:currentUser.nome},patch={boletoStatus:'Enviado',boletoEnviadoEm:em,boletoEnviadoPor:currentUser.uid,boletoCanal:canal,boletoEnvioObs:obs,boletoEnvios:[...envios,entry]};if(!c.boletoGeradoEm){patch.boletoGeradoEm=nowISO();patch.boletoGeradoPor=currentUser.uid;patch.boletoGeracoes=[...v1227Geracoes(c),{em:patch.boletoGeradoEm,identificador:c.boletoIdentificador||'',observacao:'Geração registrada automaticamente ao registrar envio.',uid:currentUser.uid,nome:currentUser.nome}]}
+  await setDoc(COLS.cobrancas,cid,patch);await audit('boleto_enviado','Boletos',cid,`${c.locacaoProtocolo||c.locacaoId} · ${monthLabel(c.competencia)} enviado por ${canal}.`);fecharModal();render();toast('Envio registrado.');
+}
+function v1227AbrirDispensa(cid){
+  const c=find('cobrancas',cid);if(!c||!isAdmin())return;abrirModal('Não gerar boleto nesta competência',`<p><b>${esc(clientName(c.clienteId))}</b> · ${esc(monthLabel(c.competencia))}</p><p class="hint">A competência continuará no histórico, mas deixará de aparecer como boleto pendente.</p><label>Motivo *</label><textarea id="blDispMot" placeholder="Ex.: pagamento antecipado, desconto integral, cobrança suspensa..."></textarea>`,`<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn danger" onclick="v1227SalvarDispensa('${cid}')">Confirmar</button>`);
+}
+async function v1227SalvarDispensa(cid){
+  const c=find('cobrancas',cid),mot=$('blDispMot').value.trim();if(!mot)return alert('Informe o motivo.');const hist=Array.isArray(c.boletoDispensas)?c.boletoDispensas:[],entry={em:nowISO(),motivo:mot,uid:currentUser.uid,nome:currentUser.nome};await setDoc(COLS.cobrancas,cid,{boletoStatus:'Não gerar',boletoDispensaMotivo:mot,boletoDispensaEm:entry.em,boletoDispensas:[...hist,entry]});await audit('boleto_nao_gerar','Boletos',cid,`${c.locacaoProtocolo||c.locacaoId} · ${monthLabel(c.competencia)}: não gerar boleto. Motivo: ${mot}`);fecharModal();render();toast('Competência marcada como “Não gerar”.');
+}
+async function v1227Reabrir(cid){const c=find('cobrancas',cid);if(!c||!confirm('Retornar esta competência para “A gerar”?'))return;await setDoc(COLS.cobrancas,cid,{boletoStatus:'A gerar'});await audit('boleto_reabrir','Boletos',cid,`${c.locacaoProtocolo||c.locacaoId} · ${monthLabel(c.competencia)} retornou para A gerar.`);fecharModal();render();toast('Competência reaberta.');}
+function v1227HistoricoHtml(c){
+  const items=[];
+  v1227Geracoes(c).forEach(g=>items.push({em:g.em,text:`Boleto gerado${g.identificador?` · ${g.identificador}`:''}${g.nome?` · ${g.nome}`:''}${g.observacao?` · ${g.observacao}`:''}`}));
+  v1227Envios(c).forEach(e=>items.push({em:e.em,text:`Enviado por ${e.canal||'canal não informado'}${e.nome?` · ${e.nome}`:''}${e.observacao?` · ${e.observacao}`:''}`}));
+  (Array.isArray(c.boletoDispensas)?c.boletoDispensas:[]).forEach(d=>items.push({em:d.em,text:`Não gerar · ${d.motivo}${d.nome?` · ${d.nome}`:''}`}));
+  if(c.pagoEm)items.push({em:c.pagoEm,text:`Pagamento registrado · ${brl(c.valorPago||c.valorContrato||c.valor||0)}${c.formaPagamento?` · ${c.formaPagamento}`:''}`});
+  items.sort((a,b)=>(b.em||'').localeCompare(a.em||''));
+  return items.length?items.map(i=>`<div class="timeline-item"><strong>${dateTimeBR(i.em)}</strong><p>${esc(i.text)}</p></div>`).join(''):empty('Nenhum histórico registrado para este boleto.');
+}
+function v1227DetalharBoleto(cid){
+  const c=find('cobrancas',cid);if(!c)return;const l=find('locacoes',c.locacaoId),cli=find('clientes',c.clienteId);
+  abrirModal(`Boleto · ${monthLabel(c.competencia)}`,`<div class="grid2"><div><p><b>${esc(clientName(c.clienteId))}</b><br>${esc(cli?.cpfCnpj||'')}</p><p><b>Locação:</b> ${esc(l?.protocolo||c.locacaoProtocolo||c.locacaoId)}</p><p><b>Vencimento:</b> ${dateBR(c.vencimento)}</p></div><div><p><b>Valor:</b> ${brl(c.valorContrato||c.valor||0)}</p><p><b>Boleto:</b> ${v1227BoletoTag(c)}</p><p><b>Pagamento:</b> ${tag(paymentStatus(c),statusType(paymentStatus(c)))}</p></div></div><div class="section-title">Histórico</div>${v1227HistoricoHtml(c)}`,`<button class="btn ghost" onclick="fecharModal()">Fechar</button><button class="btn ghost" onclick="fecharModal();v1227AbrirGeracao('${cid}')">Registrar nova geração</button><button class="btn ghost" onclick="fecharModal();v1227AbrirEnvio('${cid}')">Registrar envio</button>${!c.pagoEm?`<button class="btn ghost" onclick="fecharModal();registrarPagamento('${cid}')">Registrar pagamento</button>`:''}${v1227BoletoStatus(c)==='Não gerar'?`<button class="btn" onclick="v1227Reabrir('${cid}')">Voltar para A gerar</button>`:`<button class="btn danger" onclick="fecharModal();v1227AbrirDispensa('${cid}')">Não gerar</button>`}`);
+}
+async function v1227BoletoLoteGerado(){
+  const ids=v1227Selected();if(!ids.length)return alert('Selecione ao menos um boleto.');if(!confirm(`Marcar ${ids.length} boleto(s) como gerados?`))return;requireOnline();const batch=db.batch(),em=nowISO();
+  ids.forEach(id=>{const c=find('cobrancas',id);if(!c)return;const hist=v1227Geracoes(c),entry={em,identificador:c.boletoIdentificador||'',observacao:'Marcação em lote.',uid:currentUser.uid,nome:currentUser.nome};batch.set(db.collection(COLS.cobrancas).doc(id),{boletoStatus:'Gerado',boletoGeradoEm:em,boletoGeradoPor:currentUser.uid,boletoGeracoes:[...hist,entry]},{merge:true})});
+  await batch.commit();await audit('boleto_lote_gerado','Boletos','lote',`${ids.length} boleto(s) marcados como gerados.`);render();toast(`${ids.length} boleto(s) marcados como gerados.`);
+}
+function v1227AbrirEnvioLote(){
+  const ids=v1227Selected();if(!ids.length)return alert('Selecione ao menos um boleto.');window.__blBatchIds=ids;
+  abrirModal('Registrar envio em lote',`<p><b>${ids.length}</b> boleto(s) selecionado(s).</p><div class="grid2"><div><label>Data do envio *</label><input id="blBatchData" type="date" value="${todayISO()}"></div><div><label>Canal predefinido (opcional)</label><select id="blBatchCanal"><option value="">— Escrever livremente —</option><option>WhatsApp</option><option>E-mail</option><option>Impresso / em mãos</option><option>Outro</option></select></div></div><label>Canal / forma de envio (texto livre)</label><input id="blBatchLivre" placeholder="Opcional se escolher um canal acima"><label>Observação comum</label><textarea id="blBatchObs" placeholder="Opcional"></textarea>`,`<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="v1227SalvarEnvioLote()">Registrar envios</button>`);
+}
+async function v1227SalvarEnvioLote(){
+  const ids=window.__blBatchIds||[],d=$('blBatchData').value,canal=$('blBatchLivre').value.trim()||$('blBatchCanal').value.trim(),obs=$('blBatchObs').value.trim();if(!d||!canal)return alert('Informe a data e o canal/forma de envio.');requireOnline();const batch=db.batch(),em=v1227IsoFromDate(d);
+  ids.forEach(id=>{const c=find('cobrancas',id);if(!c)return;const envios=v1227Envios(c),entry={em,canal,observacao:obs,uid:currentUser.uid,nome:currentUser.nome},patch={boletoStatus:'Enviado',boletoEnviadoEm:em,boletoEnviadoPor:currentUser.uid,boletoCanal:canal,boletoEnvioObs:obs,boletoEnvios:[...envios,entry]};if(!c.boletoGeradoEm){patch.boletoGeradoEm=nowISO();patch.boletoGeradoPor=currentUser.uid;patch.boletoGeracoes=[...v1227Geracoes(c),{em:patch.boletoGeradoEm,identificador:c.boletoIdentificador||'',observacao:'Geração registrada automaticamente no envio em lote.',uid:currentUser.uid,nome:currentUser.nome}]}batch.set(db.collection(COLS.cobrancas).doc(id),patch,{merge:true})});
+  await batch.commit();await audit('boleto_lote_enviado','Boletos','lote',`${ids.length} boleto(s) enviados por ${canal}.`);window.__blBatchIds=[];fecharModal();render();toast(`${ids.length} envio(s) registrados.`);
+}
+async function v1227SincronizarLocacao(lid){
+  const l=find('locacoes',lid);if(!l)return;if(!confirm(`Sincronizar mensalidades da locação ${l.protocolo||lid}?`))return;await sincronizarMensalidadesLocacao(lid,l);await audit('sincronizar_competencias','Boletos',lid,`${l.protocolo||lid}: competências sincronizadas pelo controle de boletos.`);render();toast('Competências sincronizadas.');
+}
+
+console.info('Safety V1.2.2.7: Central de Boletos administrativa adicionada; fluxos V1.2.2.6 preservados.');
