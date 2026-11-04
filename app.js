@@ -2251,3 +2251,90 @@ async function v1227SincronizarLocacao(lid){
 }
 
 console.info('Safety V1.2.2.7: Central de Boletos administrativa adicionada; fluxos V1.2.2.6 preservados.');
+
+// ============================================================
+// V1.2.2.8 — Relatório Técnico também para testes em Equipamentos
+// Mantém o padrão já aprovado na Assistência:
+// histórico completo OU teste individual + indicador químico.
+// ============================================================
+function v1228EquipmentTests(equipId){
+  return active('testes').filter(t=>t.equipamentoId===equipId).sort((a,b)=>{
+    const da=(a.data||'')+' '+(a.criadoEm||'');
+    const dbb=(b.data||'')+' '+(b.criadoEm||'');
+    return dbb.localeCompare(da);
+  });
+}
+
+function v1228EquipmentTestLabel(t,idx=0){
+  const tech=t.tecnicoNome||userName(t.tecnicoUid)||'Técnico não identificado';
+  return `${idx===0?'Último teste · ':''}${dateBR(t.data||todayISO())} · ${t.tipo||'Teste técnico'} · ${t.resultado||'—'} · ${tech}`;
+}
+
+function abrirSeletorRelatorioEquipamento(equipId){
+  const e=find('equipamentos',equipId);if(!e)return;
+  const tests=v1228EquipmentTests(equipId);
+  abrirModal('Relatório técnico do equipamento',`
+    <p><b>${esc(equipName(equipId))}</b></p>
+    <p class="hint">Série: ${esc(e.serial||'—')}</p>
+    <div class="notice"><b>Escolha o conteúdo do relatório.</b><br>O histórico completo é indicado para acompanhamento interno. Para entregar um teste específico, selecione-o abaixo; o PDF individual terá espaço para fixação do indicador químico utilizado.</div>
+    <div class="section-title">Histórico completo</div>
+    <button class="btn ghost" style="width:100%;text-align:left" onclick="fecharModal();v1228EmitirRelatorioEquipamento('${equipId}','')">Gerar histórico completo (${tests.length} teste${tests.length===1?'':'s'})</button>
+    <div class="section-title">Teste individual</div>
+    ${tests.length?tests.map((t,idx)=>`<div class="metric" style="margin-bottom:8px"><span>${esc(v1228EquipmentTestLabel(t,idx))}</span><button class="btn small" onclick="fecharModal();v1228EmitirRelatorioEquipamento('${equipId}','${t.id}')">Emitir este teste</button></div>`).join(''):empty('Nenhum teste registrado neste equipamento.')}
+  `,`<button class="btn ghost" onclick="fecharModal()">Fechar</button>`);
+}
+
+function v1228DocRelatorioEquipamento(e,testId=''){
+  const tests=v1228EquipmentTests(e.id);
+  const m=getActiveModel('relatorio_manutencao');
+  const selected=testId?tests.find(t=>t.id===testId):null;
+  const individual=!!selected;
+  const testesHtml=individual?v1226TestHtml(selected,0,true):(tests.length?[...tests].reverse().map((t,idx)=>v1226TestHtml(t,idx,false)).join(''):'<div class="pdf-section"><h3>Testes técnicos</h3><p>Nenhum teste registrado para este equipamento.</p></div>');
+  const title=individual?'RELATÓRIO TÉCNICO DE TESTE DO EQUIPAMENTO':'RELATÓRIO TÉCNICO — HISTÓRICO DE TESTES DO EQUIPAMENTO';
+  const testMeta=individual?`<br><b>Teste selecionado:</b> ${dateBR(selected.data||todayISO())} · ${esc(selected.tipo||'Teste técnico')}<br><b>Resultado:</b> ${esc(selected.resultado||'—')}<br><b>Técnico:</b> ${esc(selected.tecnicoNome||userName(selected.tecnicoUid)||'—')}`:'';
+  return `<div class="pdf-doc">${pdfHead()}<h1 class="pdf-title">${title}</h1><div class="pdf-meta"><b>Equipamento:</b> ${esc([e.categoriaNome||categoryName(e.categoriaId),e.tipo,e.marca,e.modelo].filter(Boolean).join(' · '))}<br><b>Nº de série:</b> ${esc(e.serial||'—')}<br><b>Tensão:</b> ${esc(e.tensao||'—')}<br><b>Situação atual:</b> ${esc(e.situacao||'—')}${testMeta}</div>${testesHtml}${individual?v1226IndicatorArea():''}<div class="pdf-section contract-body">${renderBodyText(m?.corpo||'')}</div>${pdfFooter(`v${m?.versao||'1.0'}`)}</div>`;
+}
+
+function v1228EmitirRelatorioEquipamento(equipId,testId=''){
+  const e=find('equipamentos',equipId);if(!e)return;
+  const tests=v1228EquipmentTests(equipId),t=testId?tests.find(x=>x.id===testId):null;
+  const nome=t?`Relatório Técnico de Equipamento — ${dateBR(t.data||todayISO())}`:'Relatório Técnico de Equipamento — Histórico completo';
+  const referencia=t?`Equipamento ${e.serial||equipId} · Teste ${dateBR(t.data||todayISO())}`:`Equipamento ${e.serial||equipId} · Histórico de testes`;
+  criarEGerarDocumento({
+    tipo:nome,
+    modeloTipo:'relatorio_manutencao',
+    referencia,
+    entidade:'equipamento',
+    entidadeId:equipId,
+    clienteId:'',
+    clienteNome:'',
+    serial:e.serial||'',
+    html:v1228DocRelatorioEquipamento(e,testId),
+    assinaturasNecessarias:['tecnico'],
+    sigiloFinanceiro:false,
+    visibilidadeTecnico:true,
+    sempreNovo:true
+  });
+}
+
+// Acrescenta o botão de relatório no detalhe do equipamento sem reescrever a tela.
+const _v1228DetalharEquipamento=detalharEquipamento;
+detalharEquipamento=function(id){
+  const r=_v1228DetalharEquipamento.apply(this,arguments);
+  const foot=$('modalFoot'),tests=v1228EquipmentTests(id);
+  if(foot&&tests.length&&!document.getElementById('v1228RelatorioEqBtn')){
+    foot.insertAdjacentHTML('beforeend',`<button id="v1228RelatorioEqBtn" class="btn ghost" onclick="fecharModal();abrirSeletorRelatorioEquipamento('${id}')">Gerar relatório técnico</button>`);
+  }
+  return r;
+};
+
+// Após um novo teste salvo com sucesso, oferece a emissão do relatório correspondente.
+const _v1228SalvarTeste=salvarTeste;
+salvarTeste=async function(equipId){
+  const before=v1228EquipmentTests(equipId).length;
+  await _v1228SalvarTeste.apply(this,arguments);
+  const after=v1228EquipmentTests(equipId).length;
+  if(after>before&&confirm('Teste salvo. Deseja gerar o Relatório Técnico agora?'))abrirSeletorRelatorioEquipamento(equipId);
+};
+
+console.info('Safety V1.2.2.8: relatórios técnicos habilitados também para testes feitos diretamente em Equipamentos.');
