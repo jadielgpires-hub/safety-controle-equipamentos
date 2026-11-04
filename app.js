@@ -2338,3 +2338,170 @@ salvarTeste=async function(equipId){
 };
 
 console.info('Safety V1.2.2.8: relatórios técnicos habilitados também para testes feitos diretamente em Equipamentos.');
+
+// ============================================================
+// V1.2.2.9 — Blocos complementares configuráveis no Relatório Técnico
+// - Configurados por categoria.
+// - No máximo 1 bloco por relatório individual.
+// - Indicador químico já disponível por padrão para Autoclave.
+// - Presets: Indicador químico, Observação técnica, Evidência/etiqueta,
+//   Medição complementar, além de blocos personalizados.
+// ============================================================
+function v1229Uid(prefix='blk'){
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`;
+}
+
+function v1229Preset(tipo){
+  const defs={
+    indicador_quimico:{id:'indicador_quimico',tipo:'indicador_quimico',nome:'Indicador químico',titulo:'Indicador químico utilizado',orientacao:'Fixar neste espaço o indicador químico utilizado no teste acima.',tamanho:'grande',ativo:true},
+    observacao:{id:v1229Uid('obs'),tipo:'observacao',nome:'Observação técnica',titulo:'Observação técnica complementar',orientacao:'Utilize este espaço para observações técnicas complementares, anotações ou recomendações.',tamanho:'medio',ativo:true},
+    evidencia:{id:v1229Uid('evid'),tipo:'evidencia',nome:'Evidência / etiqueta',titulo:'Evidência / etiqueta',orientacao:'Espaço reservado para fixação de etiqueta, selo, lacre ou outra evidência física relacionada ao teste.',tamanho:'grande',ativo:true},
+    medicao:{id:v1229Uid('med'),tipo:'medicao',nome:'Medição complementar',titulo:'Medição complementar',orientacao:'Utilize este espaço para registrar manualmente uma medição complementar não prevista nos parâmetros do teste.',tamanho:'medio',ativo:true},
+    custom:{id:v1229Uid('custom'),tipo:'custom',nome:'Novo bloco',titulo:'Bloco complementar',orientacao:'',tamanho:'medio',ativo:true}
+  };
+  return defs[tipo]||defs.custom;
+}
+
+function v1229ConfiguredBlocks(cat){
+  const raw=Array.isArray(cat?.reportBlocks)?cat.reportBlocks.filter(b=>b&&b.ativo!==false):[];
+  if(raw.length)return raw;
+  if(/autoclave/i.test(cat?.nome||''))return [v1229Preset('indicador_quimico')];
+  return [];
+}
+
+function v1229DefaultBlockId(cat){
+  const blocks=v1229ConfiguredBlocks(cat);
+  const configured=cat?.reportDefaultBlockId||'';
+  if(configured&&blocks.some(b=>b.id===configured))return configured;
+  if(/autoclave/i.test(cat?.nome||'')){
+    const chem=blocks.find(b=>b.tipo==='indicador_quimico'||b.id==='indicador_quimico');
+    if(chem)return chem.id;
+  }
+  return '';
+}
+
+function v1229BlockHeight(size){return size==='pequeno'?'26mm':size==='grande'?'50mm':'38mm'}
+function v1229BlockCaption(b){
+  const tipo=b?.tipo||'custom';
+  if(tipo==='indicador_quimico')return 'ESPAÇO PARA FIXAÇÃO DO INDICADOR QUÍMICO';
+  if(tipo==='observacao')return 'ESPAÇO PARA OBSERVAÇÃO MANUAL';
+  if(tipo==='evidencia')return 'ESPAÇO PARA EVIDÊNCIA / ETIQUETA';
+  if(tipo==='medicao')return 'ESPAÇO PARA MEDIÇÃO COMPLEMENTAR';
+  return 'ESPAÇO COMPLEMENTAR';
+}
+function v1229RenderBlock(cat,blockId){
+  if(!blockId)return '';
+  const b=v1229ConfiguredBlocks(cat).find(x=>x.id===blockId);if(!b)return '';
+  return `<div class="pdf-section v1229-complement-block"><h3>${esc(b.titulo||b.nome||'Bloco complementar')}</h3>${b.orientacao?`<p>${esc(b.orientacao)}</p>`:''}<div style="height:${v1229BlockHeight(b.tamanho)};border:1.2px solid #666;border-radius:2px;display:flex;align-items:flex-end;justify-content:center;text-align:center;padding:8px 8px 5px;color:#777;font-size:9px;line-height:1.15;box-sizing:border-box">${esc(v1229BlockCaption(b))}</div></div>`;
+}
+
+function v1229BlockRowHtml(b){
+  const id=b.id||v1229Uid();
+  return `<div class="v1229-block-row" data-block-id="${esc(id)}" data-block-tipo="${esc(b.tipo||'custom')}" style="border:1px solid #d7e0ea;border-radius:10px;padding:12px;margin:10px 0;background:#fbfdff">
+    <div class="row" style="gap:8px;align-items:center"><b class="v1229-block-name-preview">${esc(b.nome||'Bloco complementar')}</b><button type="button" class="btn small danger" onclick="v1229RemoveBlock(this)">Remover</button></div>
+    <div class="grid2">
+      <div><label>Nome interno *</label><input class="v1229-bnome" value="${esc(b.nome||'')}"></div>
+      <div><label>Título exibido no relatório *</label><input class="v1229-btitulo" value="${esc(b.titulo||'')}"></div>
+    </div>
+    <label>Texto de orientação</label><textarea class="v1229-borient" rows="2">${esc(b.orientacao||'')}</textarea>
+    <div class="grid2"><div><label>Tamanho do quadro</label><select class="v1229-btam"><option value="pequeno" ${b.tamanho==='pequeno'?'selected':''}>Pequeno</option><option value="medio" ${(!b.tamanho||b.tamanho==='medio')?'selected':''}>Médio</option><option value="grande" ${b.tamanho==='grande'?'selected':''}>Grande</option></select></div><div><label>Bloco padrão desta categoria</label><label style="display:flex;align-items:center;gap:8px;margin-top:10px"><input type="radio" name="v1229DefaultBlock" value="${esc(id)}" ${b._default?'checked':''}> Usar como padrão</label></div></div>
+  </div>`;
+}
+
+function v1229AddPreset(tipo){
+  const box=$('v1229BlocksBox');if(!box)return;
+  const b=v1229Preset(tipo);
+  if(tipo==='indicador_quimico'&&[...box.querySelectorAll('.v1229-block-row')].some(r=>r.dataset.blockTipo==='indicador_quimico'))return alert('O bloco Indicador químico já foi adicionado.');
+  box.insertAdjacentHTML('beforeend',v1229BlockRowHtml(b));
+}
+function v1229RemoveBlock(btn){btn.closest('.v1229-block-row')?.remove()}
+
+// Substitui somente o editor de categoria para incluir blocos complementares.
+const _v1229EditarCategoria=editarCategoria;
+editarCategoria=function(id=''){
+  const c=id?find('categorias',id):{};
+  let blocks=v1229ConfiguredBlocks(c).map(b=>({...b,_default:b.id===v1229DefaultBlockId(c)}));
+  abrirModal(id?'Editar categoria':'Nova categoria',`
+    <label>Nome da categoria *</label><input id="catNome" value="${esc(c.nome||'')}">
+    <label>Itens / parâmetros do teste técnico</label><textarea id="catTeste" placeholder="Um item por linha">${esc((c.itensTeste||[]).join('\n'))}</textarea>
+    <label>Checklist de saída</label><textarea id="catSaida" placeholder="Um item por linha">${esc((c.checklistSaida||[]).join('\n'))}</textarea>
+    <label>Checklist de retorno</label><textarea id="catRetorno" placeholder="Um item por linha">${esc((c.checklistRetorno||[]).join('\n'))}</textarea>
+    <div class="grid2"><div><label>Periodicidade preventiva (dias, opcional)</label><input id="catPrev" type="number" value="${esc(c.preventivaDias||'')}"></div><div><label>Ativa</label><select id="catAtiva"><option value="true" ${c.ativo!==false?'selected':''}>Sim</option><option value="false" ${c.ativo===false?'selected':''}>Não</option></select></div></div>
+    <div class="section-title">Blocos complementares do relatório individual</div>
+    <p class="hint">Opcional. Na emissão de um teste individual, será possível escolher no máximo um destes blocos. O campo Observação do teste continua separado.</p>
+    <div class="inline-actions" style="flex-wrap:wrap;gap:6px">
+      <button type="button" class="btn small ghost" onclick="v1229AddPreset('indicador_quimico')">+ Indicador químico</button>
+      <button type="button" class="btn small ghost" onclick="v1229AddPreset('observacao')">+ Observação técnica</button>
+      <button type="button" class="btn small ghost" onclick="v1229AddPreset('evidencia')">+ Evidência / etiqueta</button>
+      <button type="button" class="btn small ghost" onclick="v1229AddPreset('medicao')">+ Medição complementar</button>
+      <button type="button" class="btn small ghost" onclick="v1229AddPreset('custom')">+ Personalizado</button>
+    </div>
+    <div id="v1229BlocksBox">${blocks.map(v1229BlockRowHtml).join('')||'<p class="hint">Nenhum bloco configurado. O relatório individual será emitido sem quadro complementar.</p>'}</div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:8px"><input type="radio" name="v1229DefaultBlock" value="" ${!v1229DefaultBlockId(c)?'checked':''}> Nenhum bloco como padrão</label>
+  `,`<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="salvarCategoria('${id}')">Salvar</button>`);
+};
+
+salvarCategoria=async function(id){
+  const nome=$('catNome')?.value.trim();if(!nome)return alert('Informe o nome.');
+  const blocks=[...document.querySelectorAll('.v1229-block-row')].map(r=>({
+    id:r.dataset.blockId||v1229Uid(),tipo:r.dataset.blockTipo||'custom',nome:r.querySelector('.v1229-bnome')?.value.trim()||'',titulo:r.querySelector('.v1229-btitulo')?.value.trim()||'',orientacao:r.querySelector('.v1229-borient')?.value.trim()||'',tamanho:r.querySelector('.v1229-btam')?.value||'medio',ativo:true
+  })).filter(b=>b.nome&&b.titulo);
+  const defaultId=document.querySelector('input[name="v1229DefaultBlock"]:checked')?.value||'';
+  const obj={nome,itensTeste:parseList($('catTeste')?.value||''),checklistSaida:parseList($('catSaida')?.value||''),checklistRetorno:parseList($('catRetorno')?.value||''),preventivaDias:Number($('catPrev')?.value||0),ativo:$('catAtiva')?.value==='true',reportBlocks:blocks,reportDefaultBlockId:blocks.some(b=>b.id===defaultId)?defaultId:''};
+  if(id)await setDoc(COLS.categorias,id,obj);else id=await addDoc(COLS.categorias,obj);
+  await audit(id?'editar':'criar','Configurações',id||nome,`Categoria ${nome} salva com ${blocks.length} bloco(s) complementar(es).`);fecharModal();await refresh('Categoria salva.');
+};
+
+function v1229BlockSelectHtml(cat){
+  const blocks=v1229ConfiguredBlocks(cat),def=v1229DefaultBlockId(cat);
+  return `<label>Bloco complementar do relatório</label><select id="v1229SelectedBlock"><option value="" ${!def?'selected':''}>Nenhum bloco complementar</option>${blocks.map(b=>`<option value="${esc(b.id)}" ${b.id===def?'selected':''}>${esc(b.nome||b.titulo)}</option>`).join('')}</select><p class="hint">Será incluído somente um bloco no relatório. Você pode escolher “Nenhum”.</p>`;
+}
+
+function v1229EscolherBlocoAssist(aid,testId){
+  const a=find('assistencias',aid);if(!a)return;const cat=find('categorias',a.categoriaId)||{};
+  abrirModal('Bloco complementar do relatório',`<p><b>${esc(a.protocolo||aid)}</b> · ${esc(clientName(a.clienteId))}</p>${v1229BlockSelectHtml(cat)}`,
+    `<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="v1229EmitirAssistComBloco('${aid}','${testId}')">Emitir relatório</button>`);
+}
+function v1229EscolherBlocoEquip(equipId,testId){
+  const e=find('equipamentos',equipId);if(!e)return;const cat=find('categorias',e.categoriaId)||{};
+  abrirModal('Bloco complementar do relatório',`<p><b>${esc(equipName(equipId))}</b></p><p class="hint">Série: ${esc(e.serial||'—')}</p>${v1229BlockSelectHtml(cat)}`,
+    `<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="v1229EmitirEquipComBloco('${equipId}','${testId}')">Emitir relatório</button>`);
+}
+
+// Atualiza os seletores: histórico completo permanece sem bloco; teste individual pergunta qual bloco usar.
+abrirSeletorRelatorioTecnico=function(aid){
+  const a=find('assistencias',aid);if(!a)return;const tests=v1226AssistTests(aid);
+  abrirModal('Relatório técnico',`<p><b>${esc(a.protocolo||aid)}</b> · ${esc(clientName(a.clienteId))}</p><div class="notice"><b>Escolha o conteúdo do relatório.</b><br>O histórico completo é indicado para acompanhamento interno. No teste individual, você poderá escolher um bloco complementar opcional.</div><div class="section-title">Histórico completo</div><button class="btn ghost" style="width:100%;text-align:left" onclick="fecharModal();v1226EmitirRelatorio('${aid}','')">Gerar histórico completo (${tests.length} teste${tests.length===1?'':'s'})</button><div class="section-title">Teste individual</div>${tests.length?tests.map((t,idx)=>`<div class="metric" style="margin-bottom:8px"><span>${esc(v1226TestLabel(t,idx))}</span><button class="btn small" onclick="fecharModal();v1229EscolherBlocoAssist('${aid}','${t.id}')">Emitir este teste</button></div>`).join(''):empty('Nenhum teste registrado nesta assistência.')}`,
+  `<button class="btn ghost" onclick="fecharModal()">Fechar</button>`);
+};
+
+abrirSeletorRelatorioEquipamento=function(equipId){
+  const e=find('equipamentos',equipId);if(!e)return;const tests=v1228EquipmentTests(equipId);
+  abrirModal('Relatório técnico do equipamento',`<p><b>${esc(equipName(equipId))}</b></p><p class="hint">Série: ${esc(e.serial||'—')}</p><div class="notice"><b>Escolha o conteúdo do relatório.</b><br>O histórico completo é indicado para acompanhamento interno. No teste individual, você poderá escolher um bloco complementar opcional.</div><div class="section-title">Histórico completo</div><button class="btn ghost" style="width:100%;text-align:left" onclick="fecharModal();v1228EmitirRelatorioEquipamento('${equipId}','')">Gerar histórico completo (${tests.length} teste${tests.length===1?'':'s'})</button><div class="section-title">Teste individual</div>${tests.length?tests.map((t,idx)=>`<div class="metric" style="margin-bottom:8px"><span>${esc(v1228EquipmentTestLabel(t,idx))}</span><button class="btn small" onclick="fecharModal();v1229EscolherBlocoEquip('${equipId}','${t.id}')">Emitir este teste</button></div>`).join(''):empty('Nenhum teste registrado neste equipamento.')}`,
+  `<button class="btn ghost" onclick="fecharModal()">Fechar</button>`);
+};
+
+function v1229DocRelatorioAssist(a,testId,blockId){
+  const tests=v1226AssistTests(a.id),m=getActiveModel('relatorio_manutencao'),selected=tests.find(t=>t.id===testId),cat=find('categorias',a.categoriaId)||{};
+  const testesHtml=v1226TestHtml(selected,0,true),title='RELATÓRIO TÉCNICO DE MANUTENÇÃO / TESTE';
+  const testMeta=`<br><b>Teste selecionado:</b> ${dateBR(selected?.data||todayISO())} · ${esc(selected?.tipo||'Teste técnico')}<br><b>Resultado:</b> ${esc(selected?.resultado||'—')}<br><b>Técnico:</b> ${esc(selected?.tecnicoNome||userName(selected?.tecnicoUid)||'—')}`;
+  return `<div class="pdf-doc">${pdfHead()}<h1 class="pdf-title">${title}</h1><div class="pdf-meta"><b>Atendimento:</b> ${esc(a.protocolo||a.id)}<br><b>Cliente:</b> ${esc(clientName(a.clienteId))}<br><b>Equipamento:</b> ${esc([a.equipamentoTipo,a.marca,a.modelo].filter(Boolean).join(' '))}<br><b>Nº de série:</b> ${esc(a.serial||'—')}<br><b>Defeito relatado:</b> ${esc(a.defeitoRelatado||'—')}<br><b>Diagnóstico:</b> ${esc(a.diagnostico||'—')}${testMeta}</div><div class="pdf-section"><h3>Serviços executados</h3><p>${esc(a.servicos||a.diagnostico||'—')}</p></div>${testesHtml}${v1229RenderBlock(cat,blockId)}<div class="pdf-section contract-body">${renderBodyText(m?.corpo||'')}</div>${pdfFooter(`v${m?.versao||'1.0'}`)}</div>`;
+}
+
+function v1229DocRelatorioEquip(e,testId,blockId){
+  const tests=v1228EquipmentTests(e.id),m=getActiveModel('relatorio_manutencao'),selected=tests.find(t=>t.id===testId),cat=find('categorias',e.categoriaId)||{};
+  const testesHtml=v1226TestHtml(selected,0,true),title='RELATÓRIO TÉCNICO DE TESTE DO EQUIPAMENTO';
+  const testMeta=`<br><b>Teste selecionado:</b> ${dateBR(selected?.data||todayISO())} · ${esc(selected?.tipo||'Teste técnico')}<br><b>Resultado:</b> ${esc(selected?.resultado||'—')}<br><b>Técnico:</b> ${esc(selected?.tecnicoNome||userName(selected?.tecnicoUid)||'—')}`;
+  return `<div class="pdf-doc">${pdfHead()}<h1 class="pdf-title">${title}</h1><div class="pdf-meta"><b>Equipamento:</b> ${esc([e.categoriaNome||categoryName(e.categoriaId),e.tipo,e.marca,e.modelo].filter(Boolean).join(' · '))}<br><b>Nº de série:</b> ${esc(e.serial||'—')}<br><b>Tensão:</b> ${esc(e.tensao||'—')}<br><b>Situação atual:</b> ${esc(e.situacao||'—')}${testMeta}</div>${testesHtml}${v1229RenderBlock(cat,blockId)}<div class="pdf-section contract-body">${renderBodyText(m?.corpo||'')}</div>${pdfFooter(`v${m?.versao||'1.0'}`)}</div>`;
+}
+
+function v1229EmitirAssistComBloco(aid,testId){
+  const blockId=$('v1229SelectedBlock')?.value||'';const a=find('assistencias',aid);if(!a)return;const t=v1226AssistTests(aid).find(x=>x.id===testId);if(!t)return alert('Teste não encontrado.');fecharModal();
+  criarEGerarDocumento({tipo:`Relatório de Manutenção — ${dateBR(t.data||todayISO())}`,modeloTipo:'relatorio_manutencao',referencia:`Assistência ${a.protocolo||aid} · Teste ${dateBR(t.data||todayISO())}`,entidade:'assistencia',entidadeId:aid,clienteId:a.clienteId,clienteNome:clientName(a.clienteId),serial:a.serial,html:v1229DocRelatorioAssist(a,testId,blockId),assinaturasNecessarias:['tecnico'],sigiloFinanceiro:false,sempreNovo:true});
+}
+function v1229EmitirEquipComBloco(equipId,testId){
+  const blockId=$('v1229SelectedBlock')?.value||'';const e=find('equipamentos',equipId);if(!e)return;const t=v1228EquipmentTests(equipId).find(x=>x.id===testId);if(!t)return alert('Teste não encontrado.');fecharModal();
+  criarEGerarDocumento({tipo:`Relatório Técnico de Equipamento — ${dateBR(t.data||todayISO())}`,modeloTipo:'relatorio_manutencao',referencia:`Equipamento ${e.serial||equipId} · Teste ${dateBR(t.data||todayISO())}`,entidade:'equipamento',entidadeId:equipId,clienteId:'',clienteNome:'',serial:e.serial||'',html:v1229DocRelatorioEquip(e,testId,blockId),assinaturasNecessarias:['tecnico'],sigiloFinanceiro:false,visibilidadeTecnico:true,sempreNovo:true});
+}
+
+console.info('Safety V1.2.2.9: blocos complementares configuráveis por categoria no relatório técnico.');
