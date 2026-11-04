@@ -1453,3 +1453,228 @@ async function exportPdf(html,name){
     return false;
   }
 }
+
+// ============================================================
+// V1.2.2 — Otimização de leituras Firestore + Relatório Técnico
+// Objetivo: manter o projeto dentro da cota gratuita, evitando
+// recarregamentos globais após cada ação e carregando módulos sob demanda.
+// ============================================================
+
+const V122_CACHE_TTL_MS = 10 * 60 * 1000;
+const V122_DOC_LIMIT = 100;
+const V122_AUDIT_LIMIT = 100;
+const v122LoadedAt = Object.create(null);
+const v122Dirty = new Set();
+
+function v122KeyForCollection(col){
+  const entries=Object.entries(COLS||{});
+  return entries.find(([,v])=>v===col)?.[0]||'';
+}
+function v122CollectionForKey(key){ return COLS?.[key]||''; }
+function v122IsFresh(key){
+  const t=v122LoadedAt[key]||0;
+  return !!t && !v122Dirty.has(key) && (Date.now()-t)<V122_CACHE_TTL_MS;
+}
+function v122MarkLoaded(key){v122LoadedAt[key]=Date.now();v122Dirty.delete(key)}
+function v122MarkDirty(key){if(key)v122Dirty.add(key)}
+function v122UpsertLocal(key,id,payload,merge=true){
+  if(!key)return;
+  if(!Array.isArray(data[key]))data[key]=[];
+  const wasLoaded=!!v122LoadedAt[key];
+  const i=data[key].findIndex(x=>x.id===id);
+  if(i>=0)data[key][i]=merge?{...data[key][i],...payload,id}:{...payload,id};
+  else data[key].push({id,...payload});
+  if(wasLoaded)v122MarkLoaded(key);else v122MarkDirty(key);
+}
+function v122DeleteLocal(key,id){
+  if(!key||!v122LoadedAt[key]){v122MarkDirty(key);return}
+  data[key]=(data[key]||[]).filter(x=>x.id!==id);v122MarkLoaded(key);
+}
+
+// Mantém o cache em memória coerente com gravações normais.
+addDoc=async function(col,obj){
+  requireOnline();
+  const base={...obj,criadoEm:obj.criadoEm||nowISO(),criadoPor:obj.criadoPor||currentUser?.uid||'publico'};
+  const payload=isOperationalCollection(col)?{...base,...environmentMeta()}:base;
+  const ref=await db.collection(col).add(payload);
+  v122UpsertLocal(v122KeyForCollection(col),ref.id,payload,false);
+  return ref.id;
+};
+setDoc=async function(col,id,obj,merge=true){
+  requireOnline();
+  const payload={...obj,alteradoEm:nowISO(),alteradoPor:currentUser?.uid||'publico'};
+  await db.collection(col).doc(id).set(payload,{merge});
+  v122UpsertLocal(v122KeyForCollection(col),id,payload,merge);
+};
+
+// Intercepta batches do próprio app para atualizar o cache somente após commit.
+try{
+  const v122OriginalBatch=db.batch.bind(db);
+  db.batch=function(){
+    const batch=v122OriginalBatch(),ops=[];
+    const s=batch.set.bind(batch),u=batch.update?.bind(batch),d=batch.delete.bind(batch),c=batch.commit.bind(batch);
+    batch.set=function(ref,payload,opts){ops.push({type:'set',ref,payload,merge:!!opts?.merge});if(opts===undefined)s(ref,payload);else s(ref,payload,opts);return batch};
+    if(u)batch.update=function(ref,payload){ops.push({type:'set',ref,payload,merge:true});u(ref,payload);return batch};
+    batch.delete=function(ref){ops.push({type:'delete',ref});d(ref);return batch};
+    batch.commit=async function(){
+      const result=await c();
+      for(const op of ops){
+        const col=String(op.ref?.path||'').split('/')[0],key=v122KeyForCollection(col),id=op.ref?.id;
+        if(!key||!id)continue;
+        if(op.type==='delete')v122DeleteLocal(key,id);else v122UpsertLocal(key,id,op.payload,op.merge);
+      }
+      return result;
+    };
+    return batch;
+  };
+}catch(e){console.warn('V1.2.2 cache de batch indisponível',e)}
+
+async function v122LoadFull(key,force=false){
+  if(!force&&v122IsFresh(key))return;
+  const col=v122CollectionForKey(key);if(!col)return;
+  try{
+    let q=db.collection(col);
+    if(key==='auditoria')q=q.orderBy('em','desc').limit(V122_AUDIT_LIMIT);
+    else if(key==='documentos'&&isAdmin())q=q.orderBy('criadoEm','desc').limit(V122_DOC_LIMIT);
+    const snap=await q.get();
+    data[key]=snap.docs.map(d=>({id:d.id,...d.data()}));
+    v122MarkLoaded(key);
+  }catch(e){console.warn(`V1.2.2 leitura ${key}`,e);if(!Array.isArray(data[key]))data[key]=[]}
+}
+async function v122LoadTechDocuments(force=false){
+  if(!force&&v122IsFresh('documentos'))return;
+  try{
+    const [a,b]=await Promise.all([
+      db.collection(COLS.documentos).where('visibilidadeTecnico','==',true).limit(V122_DOC_LIMIT).get(),
+      db.collection(COLS.documentos).where('sigiloFinanceiro','==',false).limit(V122_DOC_LIMIT).get()
+    ]);
+    data.documentos=v121MergeById(
+      a.docs.map(d=>({id:d.id,...d.data()})),
+      b.docs.map(d=>({id:d.id,...d.data()}))
+    ).sort((x,y)=>(y.criadoEm||'').localeCompare(x.criadoEm||'')).slice(0,V122_DOC_LIMIT);
+    v122MarkLoaded('documentos');
+  }catch(e){console.warn('V1.2.2 documentos técnico',e);data.documentos=data.documentos||[]}
+}
+async function v122LoadTechMovements(force=false){
+  if(!force&&v122IsFresh('movimentos'))return;
+  try{
+    const [a,b]=await Promise.all([
+      db.collection(COLS.movimentos).where('visibilidadeTecnico','==',true).get(),
+      db.collection(COLS.movimentos).where('sigiloFinanceiro','==',false).get()
+    ]);
+    data.movimentos=v121MergeById(
+      a.docs.map(d=>({id:d.id,...d.data()})),
+      b.docs.map(d=>({id:d.id,...d.data()}))
+    );
+    v122MarkLoaded('movimentos');
+  }catch(e){console.warn('V1.2.2 movimentos técnico',e);data.movimentos=data.movimentos||[]}
+}
+async function v122LoadKey(key,force=false){
+  if(key==='documentos'&&!isAdmin())return v122LoadTechDocuments(force);
+  if(key==='movimentos'&&!isAdmin())return v122LoadTechMovements(force);
+  return v122LoadFull(key,force);
+}
+
+function v122PageDeps(page){
+  const admin=isAdmin();
+  const deps={
+    dashboard:admin?
+      ['clientes','equipamentos','locacoes','assistencias','cobrancas','solicitacoes','configuracoes']:
+      ['clientes','equipamentos','locacoes','assistencias','configuracoes'],
+    solicitacoes:['solicitacoes','clientes','categorias'],
+    clientes:['clientes','locacoes','assistencias','equipClientes'],
+    equipamentos:['equipamentos','categorias','locacoes','movimentos','testes'],
+    locacoes:['locacoes','clientes','equipamentos','cobrancas','movimentos','modelosDocumentos'],
+    assistencias:['assistencias','clientes','equipClientes','categorias','testes','movimentos','equipamentos','modelosDocumentos'],
+    documentos:['documentos','clientes','locacoes','assistencias','movimentos','usuarios'],
+    configuracoes:['configuracoes','fabricantes','categorias','clientes','equipamentos'],
+    usuarios:['usuarios'],
+    auditoria:['auditoria'],
+    modelos:['modelosDocumentos']
+  };
+  return deps[page]||[];
+}
+async function v122EnsurePageData(page,force=false){
+  const deps=v122PageDeps(page);
+  await Promise.all(deps.map(k=>v122LoadKey(k,force&&v122Dirty.has(k))));
+}
+
+// Login: somente o necessário para Dashboard + modelos/config base do Admin.
+carregarDados=async function(){
+  data.usuarios=[{id:currentUser.uid,...currentUser}];
+  const startup=[...new Set([...v122PageDeps('dashboard'),...(isAdmin()?['modelosDocumentos']:[])])];
+  await Promise.all(startup.map(k=>v122LoadKey(k,true)));
+  await bootstrapDefaults();
+};
+
+// Navegação: carrega somente o módulo aberto e reutiliza os dados por 10 minutos.
+go=async function(page){
+  if(!canAccessPage(page)){toast('Seu perfil não possui acesso a este módulo.','danger');return}
+  currentPage=page;renderNav();fecharMenu();
+  const main=$('main');if(main)main.innerHTML='<div class="card"><p class="hint">Carregando módulo...</p></div>';
+  await v122EnsurePageData(page,false);
+  render();
+};
+
+// Ações deixam de recarregar TODAS as coleções. O cache local já foi atualizado.
+refresh=async function(message=null,rerender=true){
+  await v122EnsurePageData(currentPage,false);
+  if(rerender)render();
+  if(message)toast(message);
+};
+
+// Cadastro de usuário usa gravação direta do SDK: marca a coleção para a próxima leitura.
+if(typeof salvarNovoUsuario==='function'){
+  const v122SalvarNovoUsuario=salvarNovoUsuario;
+  salvarNovoUsuario=async function(){v122MarkDirty('usuarios');return v122SalvarNovoUsuario.apply(this,arguments)};
+}
+
+// Relatório Técnico V1.2.2: inclui TODOS os testes realizados e seus parâmetros.
+docRelatorio=function(a){
+  const tests=active('testes').filter(t=>t.assistenciaId===a.id).sort((x,y)=>(x.data||'').localeCompare(y.data||'')||(x.criadoEm||'').localeCompare(y.criadoEm||''));
+  const m=getActiveModel('relatorio_manutencao');
+  const testesHtml=tests.length?tests.map((t,idx)=>{
+    const itens=(t.itens||[]);
+    return `<div class="pdf-section"><h3>Teste ${idx+1} · ${esc(t.tipo||'Teste técnico')} · ${dateBR(t.data||todayISO())}</h3>${itens.length?`<table class="pdf-table"><thead><tr><th>Parâmetro / item testado</th><th>Resultado / valor</th></tr></thead><tbody>${itens.map(i=>`<tr><td>${esc(i.item||'—')}</td><td>${esc(i.valor||'—')}</td></tr>`).join('')}</tbody></table>`:'<p>Nenhum parâmetro individual foi informado neste teste.</p>'}<p><b>Resultado geral:</b> ${esc(t.resultado||'—')}</p>${t.observacoes?`<p><b>Observações:</b> ${esc(t.observacoes)}</p>`:''}<p><b>Técnico:</b> ${esc(t.tecnicoNome||userName(t.tecnicoUid)||'—')}</p></div>`;
+  }).join(''):'<div class="pdf-section"><h3>Testes técnicos</h3><p>Nenhum teste registrado para este atendimento.</p></div>';
+  return `<div class="pdf-doc">${pdfHead()}<h1 class="pdf-title">RELATÓRIO TÉCNICO DE MANUTENÇÃO / TESTE</h1><div class="pdf-meta"><b>Atendimento:</b> ${esc(a.protocolo||a.id)}<br><b>Cliente:</b> ${esc(clientName(a.clienteId))}<br><b>Equipamento:</b> ${esc([a.equipamentoTipo,a.marca,a.modelo].filter(Boolean).join(' '))}<br><b>Nº de série:</b> ${esc(a.serial||'—')}<br><b>Defeito relatado:</b> ${esc(a.defeitoRelatado||'—')}<br><b>Diagnóstico:</b> ${esc(a.diagnostico||'—')}</div><div class="pdf-section"><h3>Serviços executados</h3><p>${esc(a.servicos||a.diagnostico||'—')}</p></div>${testesHtml}<div class="pdf-section contract-body">${renderBodyText(m?.corpo||'')}</div>${pdfFooter(`v${m?.versao||'1.0'}`)}</div>`;
+};
+
+// Exibe uma nota discreta nas telas de alto crescimento para explicar o limite inicial.
+const v122BaseViewDocumentos=viewDocumentos;
+viewDocumentos=function(){
+  const html=v122BaseViewDocumentos();
+  return String(html).replace('<p class="hint">O PDF não é armazenado.',`<p class="hint">Exibindo até os ${V122_DOC_LIMIT} documentos mais recentes para economizar leituras. O PDF não é armazenado.`);
+};
+const v122BaseViewAuditoria=viewAuditoria;
+viewAuditoria=function(){
+  const html=v122BaseViewAuditoria();
+  return String(html).replace('<p class="hint">',`<p class="hint">Exibindo até os ${V122_AUDIT_LIMIT} registros mais recentes. `);
+};
+
+
+
+// Preparação de documento não exige carregar a coleção inteira.
+// Consulta apenas documentos já existentes da mesma entidade (normalmente poucos registros).
+criarEGerarDocumento=async function(opts){
+  try{
+    requireOnline();
+    let existing=(data.documentos||[]).find(d=>!isArchived(d)&&d.entidade===opts.entidade&&d.entidadeId===opts.entidadeId&&d.modeloTipo===opts.modeloTipo);
+    if(!existing){
+      try{
+        const snap=await db.collection(COLS.documentos).where('entidadeId','==',opts.entidadeId).limit(25).get();
+        const rows=snap.docs.map(d=>({id:d.id,...d.data()}));
+        existing=rows.find(d=>!isArchived(d)&&d.entidade===opts.entidade&&d.modeloTipo===opts.modeloTipo);
+        rows.forEach(d=>v122UpsertLocal('documentos',d.id,d,true));
+      }catch(e){console.warn('V1.2.2 consulta pontual de documento',e)}
+    }
+    if(existing)return abrirDocumentoPreparado(existing.id);
+    const model=modelForType(opts.modeloTipo),protocolo=await nextProtocol('DOC');
+    const docObj={protocolo,tipo:opts.tipo,modeloTipo:opts.modeloTipo,modeloId:model?.id||'',modeloVersao:model?.versao||'1.0',referencia:opts.referencia,entidade:opts.entidade,entidadeId:opts.entidadeId,clienteId:opts.clienteId||'',clienteNome:opts.clienteNome||'',serial:opts.serial||'',assinaturasNecessarias:opts.assinaturasNecessarias||[],assinaturaClienteVetorial:opts.assinaturaClienteVetorial||'',assinaturaTecnicoVetorial:opts.assinaturaTecnicoVetorial||'',sigiloFinanceiro:opts.sigiloFinanceiro===true,visibilidadeTecnico:opts.visibilidadeTecnico!==false,html:opts.html,ativo:true,arquivado:false};
+    const did=await addDoc(COLS.documentos,docObj);
+    await audit('preparar','Documentos',did,`${protocolo} — ${opts.tipo} preparado usando modelo v${docObj.modeloVersao}.`);
+    abrirDocumentoPreparado(did);
+  }catch(e){console.error(e);alert('Não foi possível preparar o documento: '+e.message)}
+};
+
+console.info('Safety V1.2.2: carregamento sob demanda e cache de sessão ativos.');
