@@ -1759,3 +1759,89 @@ gerarDocAssistTipo=function(id,tipo){
 };
 
 console.info('Safety V1.2.2.1: relatório técnico sempre novo, sem herdar assinatura ou conteúdo anterior.');
+
+// ============================================================
+// V1.2.2.3 — Acessórios por equipamento + valor no comprovante
+// Pós-aprovação do conselho — ajuste documental de locações.
+// ============================================================
+
+rentalItemRowV12=function(i={},idx=Date.now()){
+  const available=active('equipamentos').filter(e=>e.id===i.equipamentoId||e.situacao==='Disponível');
+  const sid=`liEquip_${String(idx).replace(/\W/g,'')}`;
+  return `<div class="rental-item" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end">
+    <div>
+      <label>Equipamento *</label>
+      <input class="search compact" placeholder="Pesquisar categoria, modelo, fabricante, série..." oninput="filterSelectOptions('${sid}',this.value)">
+      <select class="liEquip" id="${sid}"><option value="">Selecione</option>${selectOptions(available,i.equipamentoId,e=>equipName(e.id))}</select>
+    </div>
+    <button type="button" class="btn danger small" onclick="this.closest('.rental-item').remove()">Remover</button>
+    <div style="grid-column:1/-1">
+      <label>Acessórios / itens entregues junto ao equipamento</label>
+      <input class="liAcessorios" value="${esc(i.acessorios||'')}" placeholder="Ex.: cabo de alimentação, bandeja, mangueira, suporte">
+      <p class="hint">Opcional. Este campo aparece nos documentos de locação e entrega.</p>
+    </div>
+  </div>`;
+};
+
+collectRentalItemsV12=function(){
+  return [...document.querySelectorAll('.rental-item')].map(r=>{
+    const eid=r.querySelector('.liEquip')?.value,e=find('equipamentos',eid);
+    if(!eid)return null;
+    return {
+      equipamentoId:eid,
+      serialSnapshot:e?.serial||'',
+      descricaoSnapshot:equipName(eid),
+      acessorios:(r.querySelector('.liAcessorios')?.value||'').trim()
+    };
+  }).filter(Boolean);
+};
+
+// Mantém a edição pós-criação restrita, mas permite corrigir observações
+// e acessórios sem abrir uma "porta dos fundos" para condições comerciais.
+editarLocacao=function(id=''){
+  if(id){
+    const l=find('locacoes',id);
+    const acc=(l.itens||[]).map((i,idx)=>`<div class="metric" style="display:block;margin-bottom:10px">
+      <label>${esc(i.descricaoSnapshot||equipName(i.equipamentoId))} · Série ${esc(i.serialSnapshot||find('equipamentos',i.equipamentoId)?.serial||'—')}</label>
+      <input class="lAccEdit" data-idx="${idx}" value="${esc(i.acessorios||'')}" placeholder="Acessórios / itens entregues">
+    </div>`).join('');
+    return abrirModal(`Observações e acessórios · ${l.protocolo||id}`,
+      `<div class="notice blue">Alterações contratuais continuam sendo feitas pelos comandos específicos da locação. Aqui é possível editar apenas observações e os acessórios entregues com cada equipamento.</div>
+       <div class="section-title">Acessórios / itens entregues</div>${acc||empty('Nenhum equipamento vinculado.')}
+       <label>Observações internas</label><textarea id="lObsEdit">${esc(l.observacoes||'')}</textarea>`,
+      `<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="salvarObservacoesLocacao('${id}')">Salvar</button>`);
+  }
+  abrirModal('Nova locação',`<div class="grid2"><div><label>Cliente *</label><input class="search compact" placeholder="Pesquisar cliente..." oninput="filterSelectOptions('lCliente',this.value)"><select id="lCliente" onchange="preencherDadosLocClienteV12()"><option value="">Selecione</option>${selectOptions(active('clientes').filter(c=>c.cadastroNivel!=='rapido'||c.cpfCnpj),'',c=>c.nomeRazao+' · '+(c.cpfCnpj||''))}</select></div><div><label>Responsável *</label><select id="lResp"><option value="">Selecione</option></select></div><div><label>Data inicial *</label><input id="lInicio" type="date" value="${todayISO()}" onchange="const v=$('lPrimeiroVenc');if(v&&!v.dataset.touched)v.value=this.value"></div><div><label>Data final prevista *</label><input id="lTermino" type="date"></div><div><label>Primeiro vencimento *</label><input id="lPrimeiroVenc" type="date" value="${todayISO()}" onchange="this.dataset.touched='1'"></div><div><label>Valor mensal total *</label><input id="lValorTotal" inputmode="decimal"></div></div><div class="section-title">Endereço de instalação</div>${addressForm('lInst',{})}<div class="section-title">Equipamentos</div>${rentalItemsHtmlV12([])}<label>Observações internas</label><textarea id="lObs"></textarea>`, `<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="salvarLocacao('')">Salvar locação</button>`);
+};
+
+salvarObservacoesLocacao=async function(id){
+  const l=find('locacoes',id),obs=$('lObsEdit').value.trim(),inputs=[...document.querySelectorAll('.lAccEdit')];
+  const itens=(l.itens||[]).map((i,idx)=>({...i,acessorios:(inputs.find(x=>Number(x.dataset.idx)===idx)?.value||'').trim()}));
+  await setDoc(COLS.locacoes,id,{observacoes:obs,itens});
+  await audit('observacoes','Locações',id,`${l.protocolo||id}: observações/acessórios atualizados.`);
+  fecharModal();await refresh('Observações e acessórios atualizados.');
+};
+
+rentalTable=function(l){
+  return `<table class="pdf-table"><thead><tr><th>Equipamento</th><th>Nº de série</th><th>Tensão</th><th>Acessórios / itens entregues</th></tr></thead><tbody>${(l.itens||[]).map(i=>{const e=find('equipamentos',i.equipamentoId)||{};return `<tr><td>${esc([e.categoriaNome||categoryName(e.categoriaId),e.modelo,e.marca].filter(Boolean).join(' · ')||i.descricaoSnapshot||'')}</td><td>${esc(i.serialSnapshot||e.serial||'')}</td><td>${esc(e.tensao||'—')}</td><td>${esc(i.acessorios||'—')}</td></tr>`}).join('')}</tbody></table><p class="pdf-value"><b>Valor mensal vigente: ${brl(locValorAtual(l))}</b></p>`;
+};
+
+rentalTableOperational=function(l){
+  return `<table class="pdf-table"><thead><tr><th>Equipamento</th><th>Nº de série</th><th>Tensão</th><th>Acessórios / itens entregues</th></tr></thead><tbody>${(l.itens||[]).map(i=>{const e=find('equipamentos',i.equipamentoId)||{};return `<tr><td>${esc([e.categoriaNome||categoryName(e.categoriaId),e.modelo,e.marca].filter(Boolean).join(' · ')||i.descricaoSnapshot||'')}</td><td>${esc(i.serialSnapshot||e.serial||'')}</td><td>${esc(e.tensao||'—')}</td><td>${esc(i.acessorios||'—')}</td></tr>`}).join('')}</tbody></table>`;
+};
+
+function v1223DeliveryTable(l){
+  return `<table class="pdf-table"><thead><tr><th>Equipamento</th><th>Nº de série</th><th>Tensão</th><th>Acessórios / itens entregues</th></tr></thead><tbody>${(l.itens||[]).map(i=>{const e=find('equipamentos',i.equipamentoId)||{};return `<tr><td>${esc([e.categoriaNome||categoryName(e.categoriaId),e.modelo,e.marca].filter(Boolean).join(' · ')||i.descricaoSnapshot||'')}</td><td>${esc(i.serialSnapshot||e.serial||'')}</td><td>${esc(e.tensao||'—')}</td><td>${esc(i.acessorios||'—')}</td></tr>`}).join('')}</tbody></table>`;
+}
+
+docLocacao=function(l,tipo){
+  const c=find('clientes',l.clienteId),isContract=tipo==='Contrato de Locação de Equipamentos',model=getActiveModel(isContract?'contrato_locacao':'comprovante_entrega'),valor=locValorAtual(l),shortRental=l.tipoDocumento==='30dias'||daysBetween(l.inicio,l.termino)<=31;
+  const ctx={NUMERO_CONTRATO:l.protocolo||l.id,CLIENTE:c?.nomeRazao||'',CPF_CNPJ:c?.cpfCnpj||'',RESPONSAVEL:l.responsavel||primaryResp(c||{}).nome||'',VALOR_MENSAL:brl(valor),DATA_INICIO:dateBR(l.inicio),DATA_TERMINO:dateBR(l.termino),ENDERECO_INSTALACAO:formatAddress(l.enderecoInstalacao),LOCADORA:CFG.company.name};
+  if(!isContract){
+    const valorLabel=shortRental?'Valor da locação':'Valor mensal vigente';
+    return `<div class="pdf-doc">${pdfHead()}<h1 class="pdf-title">COMPROVANTE DE ENTREGA DE EQUIPAMENTO</h1><div class="pdf-meta"><b>Locação:</b> ${esc(l.protocolo||l.id)}<br><b>Data da entrega:</b> ${dateBR((l.entregueEm||nowISO()).slice(0,10))}<br><b>Cliente:</b> ${esc(c?.nomeRazao||'')} · <b>CPF/CNPJ:</b> ${esc(c?.cpfCnpj||'—')}<br><b>Responsável:</b> ${esc(l.responsavel||primaryResp(c||{}).nome||'—')}<br><b>Endereço da entrega/instalação:</b> ${esc(formatAddress(l.enderecoInstalacao))}<br><b>Período da locação:</b> ${dateBR(l.inicio)} a ${dateBR(l.termino)}<br><b>${valorLabel}:</b> ${brl(valor)}</div><div class="pdf-section"><h3>Equipamentos e acessórios entregues</h3>${v1223DeliveryTable(l)}</div><div class="pdf-section contract-body"><h3>Condições de entrega</h3>${renderBodyText(model?.corpo||'',ctx)}</div>${pdfFooter(`v${model?.versao||'1.0'}`)}</div>`;
+  }
+  return `<div class="pdf-doc">${pdfHead()}<h1 class="pdf-title">CONTRATO DE LOCAÇÃO DE EQUIPAMENTOS</h1><div class="pdf-meta"><b>Nº:</b> ${esc(l.protocolo||l.id)}<br><b>LOCADORA:</b> ${esc(CFG.company.name)} · CNPJ ${esc(CFG.company.cnpj)}<br><b>LOCATÁRIA:</b> ${esc(c?.nomeRazao||'')} · <b>CPF/CNPJ:</b> ${esc(c?.cpfCnpj||'')}<br><b>Responsável:</b> ${esc(l.responsavel||primaryResp(c||{}).nome||'—')}<br><b>Endereço de instalação:</b> ${esc(formatAddress(l.enderecoInstalacao))}<br><b>Período:</b> ${dateBR(l.inicio)} a ${dateBR(l.termino)}<br><b>Primeiro vencimento:</b> ${dateBR(l.primeiroVencimento||l.inicio)}<br><b>Valor mensal:</b> ${brl(valor)}</div><div class="pdf-section"><h3>Equipamentos e acessórios</h3>${rentalTable(l)}</div><div class="pdf-section contract-body"><h3>Cláusulas contratuais</h3>${renderBodyText(model?.corpo||'',ctx)}</div>${pdfFooter(`v${model?.versao||'1.0'}`)}</div>`;
+};
+
+console.info('Safety V1.2.2.3: acessórios por equipamento e valor no comprovante de entrega habilitados.');
