@@ -1845,3 +1845,225 @@ docLocacao=function(l,tipo){
 };
 
 console.info('Safety V1.2.2.3: acessórios por equipamento e valor no comprovante de entrega habilitados.');
+
+// ============================================================
+// V1.2.2.4 — Permanência mínima contratual + controle de boletos
+// Ajuste operacional pós-aprovação do conselho — 04/11/2026.
+// ============================================================
+
+function v1224IsShortRental(l){
+  return !!(l?.inicio&&l?.termino&&daysBetween(l.inicio,l.termino)<=31);
+}
+function v1224MinStayDate(l){
+  if(!l?.inicio||v1224IsShortRental(l))return null;
+  return v121DateAddMonths(l.inicio,3);
+}
+function v1224MinStayNotice(l){
+  const min=v1224MinStayDate(l);if(!min)return '';
+  const cumprida=todayISO()>=min;
+  return `<div class="notice ${cumprida?'blue':''}"><b>Permanência mínima contratual:</b> 3 meses, até <b>${dateBR(min)}</b>.<br>${cumprida?'Período mínimo já cumprido. A locação pode ser encerrada normalmente.':'Se houver encerramento antes desta data, o sistema permitirá a operação, mas registrará o encerramento antecipado/quebra contratual e exigirá um motivo.'}</div>`;
+}
+
+// Na criação, locações curtas continuam permitidas até 31 dias. Acima disso,
+// o período contratado não pode nascer menor do que os 3 meses obrigatórios.
+const _v1224SalvarLocacao=salvarLocacao;
+salvarLocacao=async function(id){
+  if(!id&&$('lInicio')&&$('lTermino')){
+    const inicio=$('lInicio').value,termino=$('lTermino').value;
+    if(inicio&&termino&&daysBetween(inicio,termino)>31){
+      const minimo=v121DateAddMonths(inicio,3);
+      if(termino<minimo)return alert(`Para contrato recorrente, a permanência mínima é de 3 meses.\n\nData inicial: ${dateBR(inicio)}\nPermanência mínima até: ${dateBR(minimo)}\n\nAjuste a data final prevista para ${dateBR(minimo)} ou uma data posterior.`);
+    }
+  }
+  return _v1224SalvarLocacao.apply(this,arguments);
+};
+
+// Informa a regra antes do usuário salvar uma nova locação, sem mudar o formulário.
+const _v1224EditarLocacao=editarLocacao;
+editarLocacao=function(id=''){
+  const r=_v1224EditarLocacao.apply(this,arguments);
+  if(!id){
+    const term=$('lTermino');
+    if(term&&!document.getElementById('v1224MinHint')){
+      const p=document.createElement('p');p.id='v1224MinHint';p.className='hint';
+      p.innerHTML='<b>Regra Safety:</b> locação curta pode ter até 31 dias. Contratos recorrentes possuem permanência mínima obrigatória de 3 meses; depois desse período, podem ser encerrados a qualquer momento.';
+      term.parentElement?.appendChild(p);
+    }
+  }
+  return r;
+};
+
+// O encerramento permanece disponível. Antes dos 3 meses, exige ciência e motivo.
+encerrarLocacaoV12=async function(id){
+  try{
+    const l=find('locacoes',id);if(!l||RENTAL_CLOSED_STATUSES.has(l.status))return;
+    const minimo=v1224MinStayDate(l),antecipado=!!(minimo&&todayISO()<minimo);
+    let motivo='';
+    if(antecipado){
+      const ok=confirm(`ATENÇÃO — PERMANÊNCIA MÍNIMA NÃO CUMPRIDA\n\nEsta locação possui permanência mínima de 3 meses, até ${dateBR(minimo)}.\n\nEncerrar agora será registrado como encerramento antecipado/quebra contratual.\n\nDeseja continuar mesmo assim?`);
+      if(!ok)return;
+      motivo=(prompt('Informe o motivo do encerramento antecipado / quebra contratual:','')||'').trim();
+      if(!motivo)return alert('Para encerrar antes do período mínimo, informe o motivo.');
+    }else if(!confirm('Confirmar devolução e encerramento? Os equipamentos irão para teste de retorno.'))return;
+    requireOnline();
+    const patch={status:'Encerrada',terminoReal:todayISO(),encerradoEm:nowISO(),encerradoPor:currentUser.uid,permanenciaMinimaAte:minimo||null,encerramentoAntecipado:antecipado,encerramentoMotivo:motivo||'Encerramento normal'};
+    const batch=db.batch();batch.set(db.collection(COLS.locacoes).doc(id),patch,{merge:true});
+    for(const i of l.itens||[])batch.set(db.collection(COLS.equipamentos).doc(i.equipamentoId),{situacao:'Aguardando teste',localAtual:'Safety',alteradoEm:nowISO(),alteradoPor:currentUser.uid},{merge:true});
+    await batch.commit();
+    await audit(antecipado?'encerrar_antecipado':'encerrar','Locações',id,antecipado?`${l.protocolo||id} encerrada antes da permanência mínima (${dateBR(minimo)}). Motivo: ${motivo}`:`${l.protocolo||id} encerrada após/fora da regra de permanência mínima.`);
+    await refresh(null,false);
+    if(confirm('Deseja gerar o Comprovante de Devolução / Encerramento?'))gerarComprovanteDevolucao(id);else{render();toast(antecipado?'Locação encerrada antecipadamente e registrada na auditoria.':'Locação encerrada. Equipamentos aguardam teste.');}
+  }catch(e){console.error(e);alert('Não foi possível encerrar a locação: '+e.message)}
+};
+
+// Mostra a permanência mínima ao abrir a locação, para Administrativo e Técnico.
+const _v1224DetalharLocacao=detalharLocacao;
+detalharLocacao=function(id){
+  const r=_v1224DetalharLocacao.apply(this,arguments),l=find('locacoes',id),mb=$('modalBody');
+  if(l&&mb){const n=v1224MinStayNotice(l);if(n)mb.insertAdjacentHTML('afterbegin',n)}
+  return r;
+};
+
+// Compatibilidade: locação de até 31 dias usa comprovante; acima disso usa contrato.
+gerarDocumentoLocacao=function(id){
+  const l=find('locacoes',id);if(!l)return;
+  if(!isAdmin())return gerarComprovanteEntregaLocacao(id);
+  if(v1224IsShortRental(l))return gerarComprovanteEntregaLocacao(id);
+  abrirModal('Documento da locação',`<p><b>${esc(l.protocolo||id)} · ${esc(clientName(l.clienteId))}</b></p><div class="doc-choice-grid"><button class="btn" onclick="fecharModal();gerarContratoLocacao('${id}')">Contrato de Locação</button><button class="btn ghost" onclick="fecharModal();gerarComprovanteEntregaLocacao('${id}')">Comprovante de Entrega</button></div>`,`<button class="btn ghost" onclick="fecharModal()">Fechar</button>`);
+};
+
+// Contrato/documentos: exibe a permanência mínima sem alterar o corpo jurídico versionado.
+docLocacao=function(l,tipo){
+  const c=find('clientes',l.clienteId),isContract=tipo==='Contrato de Locação de Equipamentos',model=getActiveModel(isContract?'contrato_locacao':'comprovante_entrega'),valor=locValorAtual(l),shortRental=v1224IsShortRental(l),minimo=v1224MinStayDate(l),resp=primaryResp(c||{});
+  const clienteContato=[c?.telefone,c?.email].filter(Boolean).join(' · ')||'—';
+  const responsavelContato=[resp?.telefone,resp?.email].filter(Boolean).join(' · ')||clienteContato;
+  const ctx={NUMERO_CONTRATO:l.protocolo||l.id,CLIENTE:c?.nomeRazao||'',CPF_CNPJ:c?.cpfCnpj||'',RESPONSAVEL:l.responsavel||resp?.nome||'',TELEFONE_CLIENTE:c?.telefone||'',EMAIL_CLIENTE:c?.email||'',TELEFONE_RESPONSAVEL:resp?.telefone||'',EMAIL_RESPONSAVEL:resp?.email||'',VALOR_MENSAL:brl(valor),DATA_INICIO:dateBR(l.inicio),DATA_TERMINO:dateBR(l.termino),ENDERECO_INSTALACAO:formatAddress(l.enderecoInstalacao),LOCADORA:CFG.company.name};
+  if(!isContract){
+    const valorLabel=shortRental?'Valor da locação':'Valor mensal vigente';
+    return `<div class="pdf-doc">${pdfHead()}<h1 class="pdf-title">COMPROVANTE DE ENTREGA DE EQUIPAMENTO</h1><div class="pdf-meta"><b>Locação:</b> ${esc(l.protocolo||l.id)}<br><b>Data da entrega:</b> ${dateBR((l.entregueEm||nowISO()).slice(0,10))}<br><b>Cliente:</b> ${esc(c?.nomeRazao||'')} · <b>CPF/CNPJ:</b> ${esc(c?.cpfCnpj||'—')}<br><b>Contato do cliente:</b> ${esc(clienteContato)}<br><b>Responsável:</b> ${esc(l.responsavel||resp?.nome||'—')}<br><b>Contato do responsável:</b> ${esc(responsavelContato)}<br><b>Endereço da entrega/instalação:</b> ${esc(formatAddress(l.enderecoInstalacao))}<br><b>Período da locação:</b> ${dateBR(l.inicio)} a ${dateBR(l.termino)}${minimo?`<br><b>Permanência mínima:</b> 3 meses — até ${dateBR(minimo)}`:''}<br><b>${valorLabel}:</b> ${brl(valor)}</div><div class="pdf-section"><h3>Equipamentos e acessórios entregues</h3>${v1223DeliveryTable(l)}</div><div class="pdf-section contract-body"><h3>Condições de entrega</h3>${renderBodyText(model?.corpo||'',ctx)}</div>${pdfFooter(`v${model?.versao||'1.0'}`)}</div>`;
+  }
+  return `<div class="pdf-doc">${pdfHead()}<h1 class="pdf-title">CONTRATO DE LOCAÇÃO DE EQUIPAMENTOS</h1><div class="pdf-meta"><b>Nº:</b> ${esc(l.protocolo||l.id)}<br><b>LOCADORA:</b> ${esc(CFG.company.name)} · CNPJ ${esc(CFG.company.cnpj)}<br><b>LOCATÁRIA:</b> ${esc(c?.nomeRazao||'')} · <b>CPF/CNPJ:</b> ${esc(c?.cpfCnpj||'')}<br><b>Contato da locatária:</b> ${esc(clienteContato)}<br><b>Responsável:</b> ${esc(l.responsavel||resp?.nome||'—')}<br><b>Contato do responsável:</b> ${esc(responsavelContato)}<br><b>Endereço de instalação:</b> ${esc(formatAddress(l.enderecoInstalacao))}<br><b>Período previsto:</b> ${dateBR(l.inicio)} a ${dateBR(l.termino)}<br><b>Permanência mínima obrigatória:</b> 3 meses — até ${dateBR(minimo)}<br><b>Primeiro vencimento:</b> ${dateBR(l.primeiroVencimento||l.inicio)}<br><b>Valor mensal:</b> ${brl(valor)}</div><div class="pdf-section"><h3>Equipamentos e acessórios</h3>${rentalTable(l)}</div><div class="pdf-section contract-body"><h3>Cláusulas contratuais</h3>${renderBodyText(model?.corpo||'',ctx)}</div>${pdfFooter(`v${model?.versao||'1.0'}`)}</div>`;
+};
+
+// ---------------- Controle mensal de boletos no Dashboard ----------------
+function v1224BoletoStatus(c){return c?.boletoStatus||'A gerar'}
+function v1224BoletoTag(c){const s=v1224BoletoStatus(c);return tag(s,s==='Enviado'?'ok':s==='Gerado'?'info':'warn')}
+function v1224BoletosMes(){
+  const mes=todayISO().slice(0,7);
+  return active('cobrancas').filter(c=>c.competencia===mes&&c.locacaoId&&clienteOperacional(c.clienteId)).sort((a,b)=>(a.vencimento||'').localeCompare(b.vencimento||''));
+}
+function v1224BoletoDashboard(){
+  if(!isAdmin())return '';
+  const rows=v1224BoletosMes(),agerar=rows.filter(c=>v1224BoletoStatus(c)==='A gerar').length,gerados=rows.filter(c=>v1224BoletoStatus(c)==='Gerado').length,enviados=rows.filter(c=>v1224BoletoStatus(c)==='Enviado').length;
+  return `<div class="card" id="boletoDashCard"><div class="row"><div><h2>Boletos do mês — ${monthLabel(todayISO().slice(0,7))}</h2><p class="hint">Controle dos boletos emitidos externamente. O status do boleto é separado do status do pagamento.</p></div><div class="inline-actions"><button class="btn small ghost" onclick="v1224FiltrarBoletos('Todos')">Todos (${rows.length})</button><button class="btn small ghost" onclick="v1224FiltrarBoletos('A gerar')">A gerar (${agerar})</button><button class="btn small ghost" onclick="v1224FiltrarBoletos('Gerado')">Gerados (${gerados})</button><button class="btn small ghost" onclick="v1224FiltrarBoletos('Enviado')">Enviados (${enviados})</button></div></div><div class="inline-actions" style="margin:10px 0"><button class="btn small" onclick="v1224BoletoLote('Gerado')">Marcar selecionados como gerados</button><button class="btn small ghost" onclick="v1224BoletoLote('Enviado')">Marcar selecionados como enviados</button></div><input class="search" placeholder="Pesquisar cliente, locação, vencimento ou status..." oninput="filterTable('boletoDashTable',this.value)">${rows.length?`<table id="boletoDashTable"><thead><tr><th></th><th>Cliente / Locação</th><th>Vencimento</th><th>Valor</th><th>Boleto</th><th>Pagamento</th><th>Ação</th></tr></thead><tbody>${rows.map(c=>{const l=find('locacoes',c.locacaoId);return `<tr data-boleto="${esc(v1224BoletoStatus(c))}" data-search="${esc([clientName(c.clienteId),l?.protocolo||c.locacaoProtocolo,c.vencimento,v1224BoletoStatus(c),paymentStatus(c)].join(' '))}"><td><input type="checkbox" class="boletoSel" value="${c.id}" aria-label="Selecionar boleto"></td><td><b>${esc(clientName(c.clienteId))}</b><br><span class="muted">${esc(l?.protocolo||c.locacaoProtocolo||c.locacaoId)}</span></td><td>${dateBR(c.vencimento)}</td><td><b>${brl(c.valorContrato||c.valor||0)}</b></td><td>${v1224BoletoTag(c)}${c.boletoIdentificador?`<br><span class="muted">${esc(c.boletoIdentificador)}</span>`:''}</td><td>${tag(paymentStatus(c),statusType(paymentStatus(c)))}</td><td><div class="inline-actions">${v1224BoletoStatus(c)==='A gerar'?`<button class="btn small" onclick="v1224AbrirBoleto('${c.id}','Gerado')">Marcar gerado</button>`:v1224BoletoStatus(c)==='Gerado'?`<button class="btn small" onclick="v1224MarcarEnviado('${c.id}')">Marcar enviado</button>`:''}<button class="btn small ghost" onclick="v1224AbrirBoleto('${c.id}')">Editar</button></div></td></tr>`}).join('')}</tbody></table>`:empty('Nenhuma mensalidade desta competência.')}</div>`;
+}
+function v1224FiltrarBoletos(status){
+  document.querySelectorAll('#boletoDashTable tbody tr').forEach(tr=>tr.style.display=(status==='Todos'||tr.dataset.boleto===status)?'':'none');
+}
+function v1224AbrirBoleto(cid,preStatus=''){
+  const c=find('cobrancas',cid);if(!c||!isAdmin())return;
+  const st=preStatus||v1224BoletoStatus(c);
+  abrirModal('Controle do boleto',`<p><b>${esc(clientName(c.clienteId))}</b> · ${monthLabel(c.competencia)} · ${brl(c.valorContrato||c.valor||0)}</p><label>Status do boleto</label><select id="blStatus"><option ${st==='A gerar'?'selected':''}>A gerar</option><option ${st==='Gerado'?'selected':''}>Gerado</option><option ${st==='Enviado'?'selected':''}>Enviado</option></select><label>Identificador / nosso número (opcional)</label><input id="blId" value="${esc(c.boletoIdentificador||'')}" placeholder="Opcional"><label>Observação</label><textarea id="blObs" placeholder="Opcional">${esc(c.boletoObs||'')}</textarea>`,`<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="v1224SalvarBoleto('${cid}')">Salvar</button>`);
+}
+async function v1224SalvarBoleto(cid){
+  if(!isAdmin())return;const c=find('cobrancas',cid),status=$('blStatus').value,ident=$('blId').value.trim(),obs=$('blObs').value.trim(),patch={boletoStatus:status,boletoIdentificador:ident,boletoObs:obs};
+  if(status==='Gerado'&&!c.boletoGeradoEm){patch.boletoGeradoEm=nowISO();patch.boletoGeradoPor=currentUser.uid}
+  if(status==='Enviado'){if(!c.boletoGeradoEm){patch.boletoGeradoEm=nowISO();patch.boletoGeradoPor=currentUser.uid}patch.boletoEnviadoEm=nowISO();patch.boletoEnviadoPor=currentUser.uid}
+  await setDoc(COLS.cobrancas,cid,patch);await audit('boleto','Locações',c.locacaoId,`${c.locacaoProtocolo||c.locacaoId} · ${monthLabel(c.competencia)}: boleto marcado como ${status}.`);fecharModal();render();toast('Controle do boleto atualizado.');
+}
+async function v1224MarcarEnviado(cid){
+  if(!isAdmin())return;const c=find('cobrancas',cid);if(!c)return;if(!confirm(`Confirmar que o boleto de ${clientName(c.clienteId)} foi enviado ao cliente?`))return;
+  const patch={boletoStatus:'Enviado',boletoEnviadoEm:nowISO(),boletoEnviadoPor:currentUser.uid};if(!c.boletoGeradoEm){patch.boletoGeradoEm=nowISO();patch.boletoGeradoPor=currentUser.uid}
+  await setDoc(COLS.cobrancas,cid,patch);await audit('boleto_enviado','Locações',c.locacaoId,`${c.locacaoProtocolo||c.locacaoId}: boleto ${monthLabel(c.competencia)} enviado.`);render();toast('Boleto marcado como enviado.');
+}
+async function v1224BoletoLote(status){
+  if(!isAdmin())return;const ids=[...document.querySelectorAll('.boletoSel:checked')].map(x=>x.value);if(!ids.length)return alert('Selecione ao menos uma mensalidade.');
+  if(!confirm(`Marcar ${ids.length} boleto(s) como ${status.toLowerCase()}?`))return;requireOnline();const batch=db.batch(),agora=nowISO();
+  for(const id of ids){const c=find('cobrancas',id);if(!c)continue;const patch={boletoStatus:status};if(status==='Gerado'){patch.boletoGeradoEm=c.boletoGeradoEm||agora;patch.boletoGeradoPor=c.boletoGeradoPor||currentUser.uid}else{patch.boletoGeradoEm=c.boletoGeradoEm||agora;patch.boletoGeradoPor=c.boletoGeradoPor||currentUser.uid;patch.boletoEnviadoEm=agora;patch.boletoEnviadoPor=currentUser.uid}batch.set(db.collection(COLS.cobrancas).doc(id),patch,{merge:true})}
+  await batch.commit();await audit('boleto_lote','Locações','lote',`${ids.length} boleto(s) marcados como ${status}.`);render();toast(`${ids.length} boleto(s) atualizados.`);
+}
+
+const _v1224ViewDashboard=viewDashboard;
+viewDashboard=function(){const base=_v1224ViewDashboard.apply(this,arguments);return isAdmin()?v1224BoletoDashboard()+base:base};
+
+console.info('Safety V1.2.2.5: contatos em documentos de locação + regras V1.2.2.4 preservadas.');
+
+// ============================================================
+// V1.2.2.6 — Relatório Técnico: histórico completo OU teste individual
+// O teste individual reserva área física para fixação do indicador químico.
+// ============================================================
+function v1226AssistTests(aid){
+  return active('testes').filter(t=>t.assistenciaId===aid).sort((a,b)=>{
+    const da=(a.data||'')+' '+(a.criadoEm||'');
+    const dbb=(b.data||'')+' '+(b.criadoEm||'');
+    return dbb.localeCompare(da);
+  });
+}
+
+function v1226TestLabel(t,idx=0){
+  const tech=t.tecnicoNome||userName(t.tecnicoUid)||'Técnico não identificado';
+  return `${idx===0?'Último teste · ':''}${dateBR(t.data||todayISO())} · ${t.tipo||'Teste técnico'} · ${t.resultado||'—'} · ${tech}`;
+}
+
+function abrirSeletorRelatorioTecnico(aid){
+  const a=find('assistencias',aid);if(!a)return;
+  const tests=v1226AssistTests(aid);
+  abrirModal('Relatório técnico',`
+    <p><b>${esc(a.protocolo||aid)}</b> · ${esc(clientName(a.clienteId))}</p>
+    <div class="notice"><b>Escolha o conteúdo do relatório.</b><br>O histórico completo é indicado para acompanhamento interno. Para entregar ao cliente, selecione o teste correspondente; o PDF individual terá espaço para fixação do indicador químico utilizado.</div>
+    <div class="section-title">Histórico completo</div>
+    <button class="btn ghost" style="width:100%;text-align:left" onclick="fecharModal();v1226EmitirRelatorio('${aid}','')">Gerar histórico completo (${tests.length} teste${tests.length===1?'':'s'})</button>
+    <div class="section-title">Teste individual</div>
+    ${tests.length?tests.map((t,idx)=>`<div class="metric" style="margin-bottom:8px"><span>${esc(v1226TestLabel(t,idx))}</span><button class="btn small" onclick="fecharModal();v1226EmitirRelatorio('${aid}','${t.id}')">Emitir este teste</button></div>`).join(''):empty('Nenhum teste registrado nesta assistência.')}
+  `,`<button class="btn ghost" onclick="fecharModal()">Fechar</button>`);
+}
+
+function v1226IndicatorArea(){
+  return `<div class="pdf-section"><h3>Indicador químico utilizado</h3><p>Fixar neste espaço o indicador químico utilizado no teste acima.</p><div style="height:42mm;border:1.2px solid #666;border-radius:2px;display:flex;align-items:center;justify-content:center;text-align:center;padding:8px;color:#777;font-size:11px;box-sizing:border-box">ESPAÇO RESERVADO PARA FIXAÇÃO DO INDICADOR QUÍMICO</div></div>`;
+}
+
+function v1226TestHtml(t,idx=0,individual=false){
+  const itens=(t?.itens||[]);
+  const tech=t?.tecnicoNome||userName(t?.tecnicoUid)||'—';
+  return `<div class="pdf-section"><h3>${individual?'Teste selecionado':`Teste ${idx+1}`} · ${esc(t?.tipo||'Teste técnico')} · ${dateBR(t?.data||todayISO())}</h3>${itens.length?`<table class="pdf-table"><thead><tr><th>Parâmetro / item testado</th><th>Resultado / valor</th></tr></thead><tbody>${itens.map(i=>`<tr><td>${esc(i.item||'—')}</td><td>${esc(i.valor||'—')}</td></tr>`).join('')}</tbody></table>`:'<p>Nenhum parâmetro individual foi informado neste teste.</p>'}<p><b>Resultado final:</b> ${esc(t?.resultado||'—')}</p>${t?.observacoes?`<p><b>Observações:</b> ${esc(t.observacoes)}</p>`:''}<p><b>Realizado por:</b> ${esc(tech)}</p></div>`;
+}
+
+function v1226DocRelatorio(a,testId=''){
+  const tests=v1226AssistTests(a.id);
+  const m=getActiveModel('relatorio_manutencao');
+  const selected=testId?tests.find(t=>t.id===testId):null;
+  const individual=!!selected;
+  const testesHtml=individual?v1226TestHtml(selected,0,true):(tests.length?[...tests].reverse().map((t,idx)=>v1226TestHtml(t,idx,false)).join(''):'<div class="pdf-section"><h3>Testes técnicos</h3><p>Nenhum teste registrado para este atendimento.</p></div>');
+  const title=individual?'RELATÓRIO TÉCNICO DE MANUTENÇÃO / TESTE':'RELATÓRIO TÉCNICO — HISTÓRICO DE TESTES';
+  const testMeta=individual?`<br><b>Teste selecionado:</b> ${dateBR(selected.data||todayISO())} · ${esc(selected.tipo||'Teste técnico')}<br><b>Resultado:</b> ${esc(selected.resultado||'—')}<br><b>Técnico:</b> ${esc(selected.tecnicoNome||userName(selected.tecnicoUid)||'—')}`:'';
+  return `<div class="pdf-doc">${pdfHead()}<h1 class="pdf-title">${title}</h1><div class="pdf-meta"><b>Atendimento:</b> ${esc(a.protocolo||a.id)}<br><b>Cliente:</b> ${esc(clientName(a.clienteId))}<br><b>Equipamento:</b> ${esc([a.equipamentoTipo,a.marca,a.modelo].filter(Boolean).join(' '))}<br><b>Nº de série:</b> ${esc(a.serial||'—')}<br><b>Defeito relatado:</b> ${esc(a.defeitoRelatado||'—')}<br><b>Diagnóstico:</b> ${esc(a.diagnostico||'—')}${testMeta}</div><div class="pdf-section"><h3>Serviços executados</h3><p>${esc(a.servicos||a.diagnostico||'—')}</p></div>${testesHtml}${individual?v1226IndicatorArea():''}<div class="pdf-section contract-body">${renderBodyText(m?.corpo||'')}</div>${pdfFooter(`v${m?.versao||'1.0'}`)}</div>`;
+}
+
+function v1226EmitirRelatorio(aid,testId=''){
+  const a=find('assistencias',aid);if(!a)return;
+  const tests=v1226AssistTests(aid),t=testId?tests.find(x=>x.id===testId):null;
+  const nome=t?`Relatório de Manutenção — ${dateBR(t.data||todayISO())}`:'Relatório de Manutenção — Histórico completo';
+  const referencia=t?`Assistência ${a.protocolo||aid} · Teste ${dateBR(t.data||todayISO())}`:`Assistência ${a.protocolo||aid} · Histórico de testes`;
+  criarEGerarDocumento({
+    tipo:nome,
+    modeloTipo:'relatorio_manutencao',
+    referencia,
+    entidade:'assistencia',
+    entidadeId:aid,
+    clienteId:a.clienteId,
+    clienteNome:clientName(a.clienteId),
+    serial:a.serial,
+    html:v1226DocRelatorio(a,testId),
+    assinaturasNecessarias:['tecnico'],
+    sigiloFinanceiro:false,
+    sempreNovo:true
+  });
+}
+
+const _v1226GerarDocAssistTipo=gerarDocAssistTipo;
+gerarDocAssistTipo=function(id,tipo){
+  if(tipo==='relatorio_manutencao')return abrirSeletorRelatorioTecnico(id);
+  return _v1226GerarDocAssistTipo.apply(this,arguments);
+};
+
+console.info('Safety V1.2.2.6: relatório técnico com histórico completo ou teste individual e área para indicador químico.');
