@@ -2505,3 +2505,124 @@ function v1229EmitirEquipComBloco(equipId,testId){
 }
 
 console.info('Safety V1.2.2.9: blocos complementares configuráveis por categoria no relatório técnico.');
+
+// ============================================================
+// V1.2.2.10 — Testes em campo + rastreabilidade de reimpressão
+// - Teste permitido na Safety, no cliente ou em outro local.
+// - Status operacional fica independente do resultado técnico quando há
+//   locação/empréstimo ativo.
+// - Local/cliente/endereço/escopo entram no relatório técnico.
+// - PDFs novos não exibem data/hora dinâmica de impressão/geração.
+// ============================================================
+
+function v12210ActiveRentalForEquipment(equipId){
+  return active('locacoes').find(l=>!RENTAL_CLOSED_STATUSES.has(l.status)&&(l.itens||[]).some(i=>i.equipamentoId===equipId))||null;
+}
+function v12210OpenLoanForEquipment(equipId){
+  return active('movimentos').find(m=>m.tipo==='Empréstimo'&&m.equipamentoId===equipId&&m.status!=='Devolvido')||null;
+}
+function v12210TestContextForEquipment(equipId){
+  const loc=v12210ActiveRentalForEquipment(equipId),loan=v12210OpenLoanForEquipment(equipId);
+  if(loc){const c=find('clientes',loc.clienteId),resp=(c?.responsaveis||[]).find(r=>r.nome===loc.responsavel)||primaryResp(c||{});return {committed:true,tipo:'locacao',locacaoId:loc.id,clienteId:loc.clienteId,clienteNome:clientName(loc.clienteId),responsavel:loc.responsavel||resp?.nome||'',endereco:formatAddress(loc.enderecoInstalacao)||'',status:loc.status};}
+  if(loan){const c=find('clientes',loan.clienteId);return {committed:true,tipo:'emprestimo',clienteId:loan.clienteId||'',clienteNome:clientName(loan.clienteId),responsavel:primaryResp(c||{})?.nome||'',endereco:'',status:'Emprestado'};}
+  return {committed:false};
+}
+function v12210ScopeOptions(){return ['Equipamento completo','Componente reparado','Teste funcional em campo','Pós-manutenção','Preventivo','Outro'].map(x=>`<option>${x}</option>`).join('')}
+function v12210ToggleLocation(prefix,ctx={}){
+  const tipo=$(prefix+'LocalTipo')?.value||'Na Safety',clientBox=$(prefix+'ClientBox'),otherBox=$(prefix+'OtherBox');
+  if(clientBox)clientBox.classList.toggle('hidden',tipo!=='No cliente');
+  if(otherBox)otherBox.classList.toggle('hidden',tipo!=='Outro local');
+  if(tipo==='No cliente'&&clientBox){
+    const cId=ctx.clienteId||'',c=find('clientes',cId),resp=ctx.responsavel||primaryResp(c||{})?.nome||'',end=ctx.endereco||'';
+    clientBox.innerHTML=`<div class="notice blue"><b>Cliente:</b> ${esc(ctx.clienteNome||clientName(cId)||'—')}<br><b>Responsável:</b> ${esc(resp||'—')}<br><b>Endereço:</b> ${esc(end||'Preencher abaixo')}</div>${end?'':`<label>Endereço/local do teste *</label><input id="${prefix}ClientAddress" placeholder="Informe o local onde o teste será realizado">`}`;
+  }
+}
+function v12210ToggleScope(prefix){const isOther=$(prefix+'Escopo')?.value==='Outro';$(prefix+'EscopoOutro')?.classList.toggle('hidden',!isOther)}
+function v12210LocationFields(prefix,ctx={}){
+  return `<div class="section-title">Local e escopo do teste</div><div class="grid2"><div><label>Local do teste *</label><select id="${prefix}LocalTipo" onchange="v12210ToggleLocation('${prefix}',window.__v12210Ctx||{})"><option>Na Safety</option><option ${ctx.committed?'selected':''}>No cliente</option><option>Outro local</option></select></div><div><label>Escopo do teste *</label><select id="${prefix}Escopo" onchange="v12210ToggleScope('${prefix}')">${v12210ScopeOptions()}</select></div></div><div id="${prefix}ClientBox" class="${ctx.committed?'':'hidden'}"></div><div id="${prefix}OtherBox" class="hidden"><label>Outro local *</label><input id="${prefix}OtherLocation" placeholder="Ex.: obra, oficina parceira, unidade do cliente..."></div><div id="${prefix}EscopoOutro" class="hidden"><label>Descreva o escopo *</label><input id="${prefix}EscopoOutroTxt" placeholder="Descreva o escopo realizado"></div>`;
+}
+function v12210ReadLocation(prefix,ctx={}){
+  const tipo=$(prefix+'LocalTipo')?.value||'Na Safety';
+  let endereco='',clienteId='',clienteNome='',responsavel='',locacaoId='';
+  if(tipo==='Na Safety')endereco=CFG.company.address||'Safety Equipamentos';
+  if(tipo==='No cliente'){
+    clienteId=ctx.clienteId||'';clienteNome=ctx.clienteNome||clientName(clienteId)||'';responsavel=ctx.responsavel||'';locacaoId=ctx.locacaoId||'';
+    endereco=ctx.endereco||$(prefix+'ClientAddress')?.value.trim()||'';
+    if(!endereco)throw new Error('Informe o endereço/local do teste no cliente.');
+  }
+  if(tipo==='Outro local'){
+    endereco=$(prefix+'OtherLocation')?.value.trim()||'';
+    if(!endereco)throw new Error('Informe o outro local do teste.');
+  }
+  const escopoSel=$(prefix+'Escopo')?.value||'Equipamento completo',escopo=escopoSel==='Outro'?($(prefix+'EscopoOutroTxt')?.value.trim()||''):escopoSel;
+  if(!escopo)throw new Error('Informe o escopo do teste.');
+  return {localTesteTipo:tipo,localTeste:endereco,clienteIdTeste:clienteId,clienteNomeTeste:clienteNome,responsavelTeste:responsavel,locacaoIdTeste:locacaoId,escopoTeste:escopo};
+}
+
+novoTeste=function(equipId){
+  const e=find('equipamentos',equipId);if(!e)return;if(isArchived(e)||e.ativo===false)return alert('Equipamento arquivado/inativo não pode receber novo teste.');
+  const cat=find('categorias',e.categoriaId),items=cat?.itensTeste||[],ctx=v12210TestContextForEquipment(equipId);window.__v12210Ctx=ctx;
+  abrirModal('Registrar teste técnico',`<p><b>${esc(equipName(equipId))}</b></p>${ctx.committed?`<div class="notice blue">O equipamento possui vínculo operacional ativo (${esc(e.situacao||ctx.status||'')}). O teste será registrado sem liberar ou alterar automaticamente o status operacional.</div>`:''}<div class="grid2"><div><label>Data *</label><input id="tData" type="date" value="${todayISO()}"></div><div><label>Tipo *</label><select id="tTipo"><option>Teste técnico</option><option>Teste de bancada</option><option>Liberação técnica</option><option>Preventiva</option><option>Teste final</option></select></div></div>${v12210LocationFields('t',ctx)}${items.length?`<div class="section-title">Parâmetros da categoria</div><div class="check-grid">${items.map((x,i)=>`<div><label>${esc(x)}</label><input id="ti${i}" placeholder="Resultado / valor"></div>`).join('')}</div>`:''}<label>Resultado *</label><select id="tResultado"><option>Aprovado</option><option>Aprovado com observação</option><option>Reprovado</option></select><label>Observação</label><textarea id="tObs"></textarea>${ctx.committed?'<div class="notice">O resultado técnico não altera a situação comercial/operacional enquanto houver vínculo ativo. Se houver reprovação, use depois o fluxo da locação/empréstimo para substituição, retirada ou manutenção.</div>':'<div class="notice blue">Sem vínculo operacional ativo: Aprovado → Disponível; Reprovado → Em manutenção.</div>'}`,
+  `<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="salvarTeste('${equipId}')">Salvar teste</button>`);
+  setTimeout(()=>{v12210ToggleLocation('t',ctx);v12210ToggleScope('t')},0);
+};
+
+salvarTeste=async function(equipId){
+  try{
+    requireOnline();const e=find('equipamentos',equipId);if(!e)return;const cat=find('categorias',e.categoriaId),ctx=v12210TestContextForEquipment(equipId),local=v12210ReadLocation('t',ctx),items=(cat?.itensTeste||[]).map((x,i)=>({item:x,valor:$(`ti${i}`)?.value||''})),resultado=$('tResultado').value;
+    const fresh=await db.collection(COLS.equipamentos).doc(equipId).get(),freshData=fresh.exists?{id:fresh.id,...fresh.data()}:e;
+    // Revalida o vínculo sem bloquear o teste. Se houver compromisso, mantém o status operacional.
+    const liveLocSnap=await db.collection(COLS.locacoes).where('ativo','==',true).get().catch(()=>null);
+    let linked=!!ctx.committed;
+    if(liveLocSnap)linked=liveLocSnap.docs.some(d=>{const l=d.data();return l.arquivado!==true&&!RENTAL_CLOSED_STATUSES.has(l.status)&&(l.itens||[]).some(i=>i.equipamentoId===equipId)} )||linked;
+    const situacaoAnterior=freshData.situacao||e.situacao||'',situacaoPosterior=linked?situacaoAnterior:(/^Aprovado/.test(resultado)?'Disponível':'Em manutenção');
+    const ref=db.collection(COLS.testes).doc(),obj=withEnvironment({equipamentoId:equipId,categoriaId:e.categoriaId,serial:e.serial,data:$('tData').value,tipo:$('tTipo').value,itens:items,observacoes:$('tObs').value.trim(),resultado,...local,situacaoAnterior,situacaoPosterior,statusOperacionalPreservado:linked,tecnicoUid:currentUser.uid,tecnicoNome:currentUser.nome,tecnicoMatricula:currentUser.matricula||'',tecnicoFuncao:currentUser.funcao||'',ativo:true,criadoEm:nowISO(),criadoPor:currentUser.uid});
+    const batch=db.batch();batch.set(ref,obj);if(!linked)batch.set(db.collection(COLS.equipamentos).doc(equipId),{situacao:situacaoPosterior,localAtual:situacaoPosterior==='Disponível'?'Safety':freshData.localAtual||'Safety',alteradoEm:nowISO(),alteradoPor:currentUser.uid},{merge:true});await batch.commit();
+    await audit('teste','Equipamentos',equipId,`Teste ${obj.tipo}: ${resultado}. Local: ${local.localTesteTipo} — ${local.localTeste}. Escopo: ${local.escopoTeste}.${linked?` Status operacional preservado em ${situacaoAnterior}.`:` Situação ${situacaoAnterior} → ${situacaoPosterior}.`}`);fecharModal();await refresh(null,false);
+    if(resultado==='Reprovado'&&linked)alert('Teste registrado como REPROVADO. O equipamento permanece com o status operacional atual. Registre a ação necessária pelo fluxo da locação/empréstimo (substituição, retirada ou manutenção).');
+    if(confirm('Teste salvo. Deseja gerar o Relatório Técnico agora?'))abrirSeletorRelatorioEquipamento(equipId);else toast('Teste registrado.');
+  }catch(err){console.error(err);alert('Não foi possível salvar o teste: '+err.message)}
+};
+
+registrarTesteAssistencia=function(aid){
+  const a=find('assistencias',aid);if(!a)return;const cat=find('categorias',a.categoriaId),items=cat?.itensTeste||[],c=find('clientes',a.clienteId)||{};
+  const ctx={committed:true,clienteId:a.clienteId,clienteNome:clientName(a.clienteId),responsavel:primaryResp(c)?.nome||'',endereco:formatAddress(c.enderecosInstalacao?.[0]||c.enderecoCadastral||{})};window.__v12210Ctx=ctx;
+  abrirModal('Teste técnico',`<p>${esc([a.equipamentoTipo,a.marca,a.modelo].filter(Boolean).join(' '))} · Série ${esc(a.serial||'—')}</p><div class="grid2"><div><label>Data *</label><input id="atData" type="date" value="${todayISO()}"></div><div><label>Tipo *</label><select id="atTipo"><option>Teste técnico</option><option>Teste de bancada</option><option>Teste final</option><option>Manutenção preventiva</option></select></div></div>${v12210LocationFields('at',ctx)}${items.length?`<div class="section-title">Parâmetros da categoria</div><div class="grid2">${items.map((x,i)=>`<div><label>${esc(x)}</label><input id="ati${i}"></div>`).join('')}</div>`:''}<label>Resultado *</label><select id="atResultado"><option>Aprovado</option><option>Aprovado com observação</option><option>Reprovado</option></select><label>Observação</label><textarea id="atObs"></textarea>`, `<button class="btn ghost" onclick="fecharModal()">Cancelar</button><button class="btn" onclick="salvarTesteAssistencia('${aid}')">Salvar teste</button>`);
+  setTimeout(()=>{v12210ToggleLocation('at',ctx);v12210ToggleScope('at')},0);
+};
+
+salvarTesteAssistencia=async function(aid){
+  try{const a=find('assistencias',aid);if(!a)return;const c=find('clientes',a.clienteId)||{},ctx={committed:true,clienteId:a.clienteId,clienteNome:clientName(a.clienteId),responsavel:primaryResp(c)?.nome||'',endereco:formatAddress(c.enderecosInstalacao?.[0]||c.enderecoCadastral||{})},local=v12210ReadLocation('at',ctx),cat=find('categorias',a.categoriaId),items=(cat?.itensTeste||[]).map((x,i)=>({item:x,valor:$(`ati${i}`)?.value||''})),resultado=$('atResultado').value,obj={assistenciaId:aid,clienteId:a.clienteId,categoriaId:a.categoriaId,serial:a.serial,data:$('atData')?.value||todayISO(),tipo:$('atTipo')?.value||'Teste técnico',itens:items,observacoes:$('atObs').value.trim(),resultado,...local,tecnicoUid:currentUser.uid,tecnicoNome:currentUser.nome,tecnicoMatricula:currentUser.matricula||'',tecnicoFuncao:currentUser.funcao||'',criadoEm:nowISO(),ativo:true};await addDoc(COLS.testes,obj);await setDoc(COLS.assistencias,aid,{status:/^Aprovado/.test(resultado)?'Liberado':'Manutenção'});await audit('teste','Assistência',aid,`Teste técnico: ${resultado}. Local: ${local.localTesteTipo} — ${local.localTeste}. Escopo: ${local.escopoTeste}.`);fecharModal();await refresh(null,false);if(confirm('Teste salvo. Deseja gerar o Relatório Técnico agora?'))abrirSeletorRelatorioTecnico(aid);else toast('Teste registrado.')}catch(e){console.error(e);alert('Não foi possível salvar o teste técnico: '+e.message)}
+};
+
+// Inclui local/escopo nos relatórios novos e mantém compatibilidade com testes antigos.
+v1226TestHtml=function(t,idx=0,individual=false){
+  const itens=t?.itens||[],tech=t?.tecnicoNome||userName(t?.tecnicoUid)||'—';
+  const local=t?.localTeste||'',localTipo=t?.localTesteTipo||'',escopo=t?.escopoTeste||'';
+  const contexto=(localTipo||local||escopo||t?.clienteNomeTeste)?`<div class="pdf-meta" style="margin:8px 0"><b>Local do teste:</b> ${esc([localTipo,local].filter(Boolean).join(' — ')||'—')}${t?.clienteNomeTeste?`<br><b>Cliente:</b> ${esc(t.clienteNomeTeste)}`:''}${t?.responsavelTeste?`<br><b>Responsável:</b> ${esc(t.responsavelTeste)}`:''}${escopo?`<br><b>Escopo:</b> ${esc(escopo)}`:''}</div>`:'';
+  return `<div class="pdf-section"><h3>${individual?'Teste selecionado':`Teste ${idx+1}`} · ${esc(t?.tipo||'Teste técnico')} · ${dateBR(t?.data||todayISO())}</h3>${contexto}${itens.length?`<table class="pdf-table"><thead><tr><th>Parâmetro / item testado</th><th>Resultado / valor</th></tr></thead><tbody>${itens.map(i=>`<tr><td>${esc(i.item||'—')}</td><td>${esc(i.valor||'—')}</td></tr>`).join('')}</tbody></table>`:'<p>Nenhum parâmetro individual foi informado neste teste.</p>'}<p><b>Resultado final:</b> ${esc(t?.resultado||'—')}</p>${t?.observacoes?`<p><b>Observações:</b> ${esc(t.observacoes)}</p>`:''}<p><b>Realizado por:</b> ${esc(tech)}</p></div>`;
+};
+
+// Rodapé documental sem data/hora dinâmica. A data válida permanece a do teste/documento.
+pdfFooter=function(model=''){return `<div class="pdf-footer">Safety Equipamentos${model?` · Modelo ${esc(model)}`:''} · Documento gerado pelo Safety - Controle de Equipamentos</div>`};
+
+// Na impressão nativa, margem física zero evita a reserva de cabeçalhos/rodapés
+// automáticos do navegador; a própria página aplica a margem visual interna.
+v121r2PrintCss=function(){return `
+@page{size:A4 portrait;margin:0}
+*{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+html,body{margin:0!important;padding:0!important;background:#fff!important;color:#18212b;font-family:Arial,Helvetica,sans-serif}
+.pdf-doc{width:100%!important;max-width:none!important;margin:0!important;padding:11mm 12mm 12mm!important;overflow:visible!important;background:#fff!important;font-size:10.5px;line-height:1.45;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.pdf-head{display:flex;align-items:center;justify-content:space-between;gap:14px;border-bottom:5px solid #073B73;padding:0 0 10px;margin:0 0 14px;break-inside:avoid;page-break-inside:avoid}
+.pdf-head img{width:44mm!important;max-width:44mm!important;max-height:24mm!important;object-fit:contain;flex:0 0 auto}
+.pdf-head .company{text-align:right;font-size:9px;line-height:1.45;color:#4f5e6c;max-width:118mm;overflow-wrap:anywhere}
+.pdf-title{font-size:19px!important;line-height:1.2;color:#073B73;text-align:center;margin:17px 0 14px;overflow-wrap:anywhere}
+.pdf-meta{background:#f5f7fa;border:1px solid #e1e7ed;padding:9px 10px;margin:10px 0;font-size:9.5px;line-height:1.5;overflow-wrap:anywhere;break-inside:avoid;page-break-inside:avoid}
+.pdf-section{margin:13px 0;max-width:100%}.pdf-section h3{font-size:12px;color:#073B73;border-bottom:1px solid #dfe5ec;padding-bottom:4px;margin:0 0 8px}
+.contract-body{font-size:9.5px;line-height:1.48;text-align:justify}.contract-body p{margin:0 0 8px;orphans:3;widows:3}
+.pdf-table{width:100%!important;max-width:100%!important;border-collapse:collapse;table-layout:fixed;margin:7px 0 10px}.pdf-table th,.pdf-table td{border:1px solid #dfe5ec;padding:6px;font-size:9px;background:#fff;overflow-wrap:anywhere;vertical-align:top}.pdf-table th{background:#eef3f8;color:#073B73;text-align:left}tr{break-inside:avoid;page-break-inside:avoid}
+.pdf-signatures{display:grid;grid-template-columns:1fr 1fr;gap:16mm;margin-top:22mm;break-inside:avoid;page-break-inside:avoid}.pdf-sign{text-align:center;font-size:9px}.pdf-sign svg,.pdf-sign img{max-width:48mm!important;max-height:18mm!important;width:auto;height:auto;display:block;margin:0 auto}.pdf-sign-space{height:18mm}.pdf-line{border-top:1px solid #333;margin-top:4px;padding-top:4px;min-height:10mm}
+.pdf-value{font-size:17px}.pdf-footer{margin-top:15px;border-top:3px solid #D4A017;padding-top:6px;text-align:center;font-size:7.5px;color:#6b7280;break-inside:avoid;page-break-inside:avoid}
+`};
+
+console.info('Safety V1.2.2.10: testes em campo, status operacional independente e reimpressão sem data/hora dinâmica.');
